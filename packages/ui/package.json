@@ -1,6 +1,6 @@
 {
   "name": "@docmd/ui",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "Base UI templates and assets for docmd.",
   "type": "module",
   "main": "dist/index.js",
@@ -25,7 +25,7 @@
     "@docmd/tui": "workspace:*"
   },
   "devDependencies": {
-    "@types/node": "^24.13.6"
+    "@types/node": "^24.19.0"
   },
   "keywords": [
     "docmd",

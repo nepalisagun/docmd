@@ -412,7 +412,8 @@ export async function buildSite(configPath: string, opts: any = {}) {
       await workerPool.terminateAll();
     }
 
-    const { getPluginErrors } = await import('@docmd/api');
+    const { getPluginErrors, shutdownEngines } = await import('@docmd/api');
+    await shutdownEngines();
     const errors = getPluginErrors();
     if (errors.length > 0) {
       // N-12: surface every plugin error in one place. Previously the

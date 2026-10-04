@@ -1,6 +1,6 @@
 {
   "name": "@docmd/plugin-openapi",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "OpenAPI documentation generator plugin for docmd.",
   "type": "module",
   "main": "dist/index.js",
@@ -38,7 +38,7 @@
   },
   "devDependencies": {
     "@docmd/api": "workspace:*",
-    "@types/node": "^24.13.6"
+    "@types/node": "^24.19.0"
   },
   "keywords": [
     "docmd",

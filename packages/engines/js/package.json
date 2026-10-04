@@ -1,6 +1,6 @@
 {
   "name": "@docmd/engine-js",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "Default JavaScript engine for docmd using Node.js native APIs.",
   "type": "module",
   "main": "dist/index.js",
@@ -21,7 +21,7 @@
     "node": ">=20.0.0"
   },
   "devDependencies": {
-    "@types/node": "^24.13.6"
+    "@types/node": "^24.19.0"
   },
   "keywords": [
     "docmd",

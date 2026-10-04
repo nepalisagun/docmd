@@ -735,6 +735,10 @@ export async function preflightEnsureRuntimeDeps(
       const id = pkgName.replace('@docmd/template-', '');
       const local = path.resolve(__monorepoRoot, 'packages/templates', id, 'dist/index.js');
       if (nativeFs.existsSync(local)) return true;
+    } else if (pkgName.startsWith('@docmd/engine-')) {
+      const id = pkgName.replace('@docmd/engine-', '');
+      const local = path.resolve(__monorepoRoot, 'packages/engines', id, 'dist/index.js');
+      if (nativeFs.existsSync(local)) return true;
     }
     // 2. Check filesystem walk-up
     return findPackageDir(pkgName, [cwd, process.cwd()]) !== null;

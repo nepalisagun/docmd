@@ -1,6 +1,6 @@
 {
   "name": "@docmd/plugin-seo",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "SEO meta tag generator for docmd.",
   "type": "module",
   "main": "dist/index.js",
@@ -32,7 +32,7 @@
   },
   "devDependencies": {
     "@docmd/api": "workspace:*",
-    "@types/node": "^24.13.6"
+    "@types/node": "^24.19.0"
   },
   "keywords": [
     "docmd",

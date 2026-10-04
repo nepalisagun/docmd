@@ -141,12 +141,16 @@ export async function runDoctor(opts: DoctorOptions): Promise<number> {
     }
   }
 
-  // 6. Check engines. (The JS engine ships with core; the Rust engine is optional.)
+  // 6. Check engines. (The JS engine ships with core; Rust and Python engines are optional.)
   const requestedEngine = (config.engine || 'js').toLowerCase();
   report.engines.push({ name: 'js', status: 'ok' });
   if (requestedEngine === 'rust' || config.engines?.rust) {
     const rustInstalled = tryReadPackage('@docmd/engine-rust');
     report.engines.push({ name: 'rust', status: rustInstalled ? 'ok' : 'missing' });
+  }
+  if (requestedEngine === 'python' || config.engines?.python) {
+    const pythonInstalled = tryReadPackage('@docmd/engine-python');
+    report.engines.push({ name: 'python', status: pythonInstalled ? 'ok' : 'missing' });
   }
 
   // 7. Optional auto-fix.

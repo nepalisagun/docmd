@@ -1,8 +1,8 @@
 {
   "$meta": {
-    "generatedAt": "2026-09-21T07:18:15.497Z",
+    "generatedAt": "2026-09-27T13:35:59.050Z",
     "generator": "scripts/build-plugin-registry.mjs",
-    "packageCount": 16
+    "packageCount": 17
   },
   "ai": {
     "package": "@docmd/plugin-ai",
@@ -208,6 +208,16 @@
     "kind": "engine",
     "displayName": "js",
     "tagline": "Default JavaScript engine for docmd using Node.js native APIs.",
+    "capabilities": []
+  },
+  "python": {
+    "package": "@docmd/engine-python",
+    "description": "Python-accelerated engine for docmd using Python 3 runtime.",
+    "configKey": "python",
+    "defaultConfig": "{}",
+    "kind": "engine",
+    "displayName": "python",
+    "tagline": "Python-accelerated engine for docmd using Python 3 runtime.",
     "capabilities": []
   },
   "rust": {

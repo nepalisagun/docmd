@@ -33,11 +33,45 @@ const ALLOWED_TASK_TYPES = new Set([
   'git:status',
   'search:index',
   'search:query',
+  'search:chunk',
+  'search:quantize',
+  'search:cosine',
 ]);
 
 // ---------------------------------------------------------------------------
 // Engine Loading
 // ---------------------------------------------------------------------------
+
+const _loadedEngines = new Set<Engine>();
+
+function registerLoadedEngine(engine: Engine): Engine {
+  _loadedEngines.add(engine);
+  return engine;
+}
+
+/**
+ * Shut down all active engines that support cleanup (e.g. terminating worker processes).
+ */
+export async function shutdownEngines(): Promise<void> {
+  for (const engine of _loadedEngines) {
+    if (typeof (engine as any).shutdown === 'function') {
+      try {
+        await (engine as any).shutdown();
+      } catch {
+        // ignore
+      }
+    }
+  }
+  _loadedEngines.clear();
+  try {
+    const py = await import('@docmd/engine-python').catch(() => null);
+    if (py && typeof (py as any).shutdownPythonEngine === 'function') {
+      (py as any).shutdownPythonEngine();
+    }
+  } catch {
+    // ignore
+  }
+}
 
 /**
  * Load an engine by name.
@@ -54,7 +88,7 @@ export async function loadEngine(name: string = 'js'): Promise<Engine> {
   const loader = engineRegistry.get(name);
   if (loader) {
     const engine = await loader();
-    if (engine) return engine;
+    if (engine) return registerLoadedEngine(engine);
   }
 
   if (name === 'js') {
@@ -64,7 +98,7 @@ export async function loadEngine(name: string = 'js'): Promise<Engine> {
     // JS engine — call it a fatal loader failure if install also fails.
     try {
       const { createJsEngine } = await import('@docmd/engine-js');
-      return createJsEngine();
+      return registerLoadedEngine(createJsEngine());
     } catch (err) {
       if (!isValidRuntimeDepName('@docmd/engine-js')) throw err;
       const installed = await installRuntimeDep('@docmd/engine-js');
@@ -72,7 +106,7 @@ export async function loadEngine(name: string = 'js'): Promise<Engine> {
         const reloaded = await tryLoadAfterInstall('@docmd/engine-js');
         if (reloaded) {
           const { createJsEngine } = reloaded as any;
-          return createJsEngine();
+          return registerLoadedEngine(createJsEngine());
         }
       }
       throw new Error(
@@ -92,7 +126,7 @@ export async function loadEngine(name: string = 'js'): Promise<Engine> {
         console.warn('[docmd] Rust engine not supported on this platform, falling back to JS engine.');
         return loadEngine('js');
       }
-      return createRustEngine();
+      return registerLoadedEngine(createRustEngine());
     } catch (error) {
       if (isValidRuntimeDepName('@docmd/engine-rust')) {
         const installed = await installRuntimeDep('@docmd/engine-rust');
@@ -101,7 +135,7 @@ export async function loadEngine(name: string = 'js'): Promise<Engine> {
           if (reloaded) {
             const { createRustEngine, isRustEngineAvailable } = reloaded as any;
             if (isRustEngineAvailable && isRustEngineAvailable()) {
-              return createRustEngine();
+              return registerLoadedEngine(createRustEngine());
             }
           }
         }
@@ -111,7 +145,36 @@ export async function loadEngine(name: string = 'js'): Promise<Engine> {
     }
   }
 
-  throw new Error(`Unknown engine: '${name}'. Available built-in engines: js, rust`);
+  if (name === 'python') {
+    // Python engine is an optional performance accelerator. Try to load
+    // it; if the package is missing, auto-install it; if install fails
+    // OR Python 3 is not available on this system, fall back to JS.
+    try {
+      const { createPythonEngine, isPythonEngineAvailable } = await import('@docmd/engine-python');
+      if (!isPythonEngineAvailable()) {
+        console.warn('[docmd] Python 3 not available on this system, falling back to JS engine.');
+        return loadEngine('js');
+      }
+      return registerLoadedEngine(createPythonEngine());
+    } catch (error) {
+      if (isValidRuntimeDepName('@docmd/engine-python')) {
+        const installed = await installRuntimeDep('@docmd/engine-python');
+        if (installed) {
+          const reloaded = await tryLoadAfterInstall('@docmd/engine-python');
+          if (reloaded) {
+            const { createPythonEngine, isPythonEngineAvailable } = reloaded as any;
+            if (isPythonEngineAvailable && isPythonEngineAvailable()) {
+              return registerLoadedEngine(createPythonEngine());
+            }
+          }
+        }
+      }
+      console.warn(`[docmd] Python engine unavailable (${(error as Error).message}), falling back to JS engine.`);
+      return loadEngine('js');
+    }
+  }
+
+  throw new Error(`Unknown engine: '${name}'. Available built-in engines: js, rust, python`);
 }
 
 /**
@@ -127,6 +190,14 @@ export async function isEngineAvailable(name: string): Promise<boolean> {
       return false;
     }
   }
+  if (name === 'python') {
+    try {
+      const { isPythonEngineAvailable } = await import('@docmd/engine-python');
+      return isPythonEngineAvailable();
+    } catch {
+      return false;
+    }
+  }
   return engineRegistry.has(name);
 }
 
@@ -136,6 +207,7 @@ export async function isEngineAvailable(name: string): Promise<boolean> {
 export async function getAvailableEngines(): Promise<string[]> {
   const engines: string[] = ['js'];
   if (await isEngineAvailable('rust')) engines.push('rust');
+  if (await isEngineAvailable('python')) engines.push('python');
   return engines;
 }
 
@@ -235,4 +307,63 @@ export async function buildSearchIndex(
   }>,
 ): Promise<string> {
   return runTask(engine, 'search:index', { documents });
+}
+
+/**
+ * Resolve an engine for plugins according to preference or availability.
+ * If preference is given (e.g. 'rust', 'python', 'js', or an array like ['rust', 'python']),
+ * it attempts to load in that order, falling back to 'js'.
+ *
+ * This allows plugins to easily request accelerated engines without needing
+ * to implement their own fallback logic.
+ */
+export async function resolveEngine(preference?: string | string[]): Promise<Engine> {
+  const prefs = Array.isArray(preference) ? preference : (preference ? [preference] : ['rust', 'python', 'js']);
+  for (const name of prefs) {
+    if (name === 'js') continue;
+    try {
+      if (await isEngineAvailable(name)) {
+        return await loadEngine(name);
+      }
+    } catch {
+      // try next
+    }
+  }
+  return loadEngine('js');
+}
+
+/**
+ * Chunk markdown text by headings and word boundaries.
+ */
+export async function chunkText(
+  engine: Engine,
+  text: string,
+  file: string,
+  chunkSize = 256,
+  chunkOverlap = 32,
+): Promise<Array<{ file: string; heading?: string; text: string; range: [number, number] }>> {
+  return runTask(engine, 'search:chunk', { text, file, chunkSize, chunkOverlap });
+}
+
+/**
+ * Quantize float32 vectors to int8.
+ */
+export async function quantizeVectors(
+  engine: Engine,
+  vectors: number[][],
+  dimensions = 384,
+): Promise<{ quantized: number[][]; mins: number[]; ranges: number[] }> {
+  return runTask(engine, 'search:quantize', { vectors, dimensions });
+}
+
+/**
+ * Compute cosine similarity between a query vector and corpus vectors.
+ */
+export async function cosineSimilarity(
+  engine: Engine,
+  query: number[],
+  vectors: number[][],
+  topK = 10,
+): Promise<Array<{ index: number; score: number }>> {
+  return runTask(engine, 'search:cosine', { query, vectors, topK });
 }

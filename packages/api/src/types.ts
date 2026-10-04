@@ -451,6 +451,7 @@ export interface Engine {
    * Clean up resources. Called when the engine is no longer needed.
    */
   destroy?(): Promise<void>;
+  shutdown?(): Promise<void> | void;
 }
 
 /**

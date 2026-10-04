@@ -106,6 +106,7 @@ export const test = runTestFile({
       assert(isValidRuntimeDepName('@docmd/template-summer') === true, 'RD-POS-2: @docmd/template-summer is valid');
       assert(isValidRuntimeDepName('@docmd/engine-js') === true, 'RD-POS-3: @docmd/engine-js is valid');
       assert(isValidRuntimeDepName('@docmd/engine-rust') === true, 'RD-POS-4: @docmd/engine-rust is valid');
+      assert(isValidRuntimeDepName('@docmd/engine-python') === true, 'RD-POS-4b: @docmd/engine-python is valid');
       assert(isValidRuntimeDepName('@docmd/plugin-math-katex') === true, 'RD-POS-5: hyphenated short names are valid');
       assert(isValidRuntimeDepName('@docmd/plugin-foo-1.0') === true, 'RD-POS-6: dotted version suffix is valid');
 
@@ -129,6 +130,7 @@ export const test = runTestFile({
       assert(shortRuntimeDepKey('@docmd/plugin-search') === 'search', 'RD-SK-1: plugin-search short name');
       assert(shortRuntimeDepKey('@docmd/template-summer') === 'summer', 'RD-SK-2: template-summer short name');
       assert(shortRuntimeDepKey('@docmd/engine-rust') === 'rust', 'RD-SK-3: engine-rust short name');
+      assert(shortRuntimeDepKey('@docmd/engine-python') === 'python', 'RD-SK-3b: engine-python short name');
       assert(shortRuntimeDepKey('@docmd/plugin-math-katex') === 'math-katex', 'RD-SK-4: hyphenated short name');
       assert(shortRuntimeDepKey('@docmd/plugin-foo; rm -rf /') === null, 'RD-SK-5: rejected name → null');
       assert(shortRuntimeDepKey('@evil/plugin-search') === null, 'RD-SK-6: rejected scope → null');
@@ -164,6 +166,7 @@ export const test = runTestFile({
       assert(r1['summer'], 'RD-REG-4: @docmd/template-summer present in registry');
       assert(r1['js'] && r1['js'].package === '@docmd/engine-js', 'RD-REG-5: js entry points at @docmd/engine-js');
       assert(r1['rust'] && r1['rust'].package === '@docmd/engine-rust', 'RD-REG-6: rust entry points at @docmd/engine-rust');
+      assert(r1['python'] && r1['python'].package === '@docmd/engine-python', 'RD-REG-6b: python entry points at @docmd/engine-python');
     }
 
     // -----------------------------------------------------------------

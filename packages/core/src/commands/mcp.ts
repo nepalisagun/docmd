@@ -18,23 +18,34 @@ import path from 'path';
 import { buildSite } from './build.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { safePath, asUserPath } from '@docmd/utils';
+import { findFilesRecursive } from '../engine/assets.js';
 
 const pkgUrl = new URL('../../package.json', import.meta.url);
 const { version } = JSON.parse(fs.readFileSync(pkgUrl, 'utf-8'));
 
 // Helpers to find and search markdown files
-function findMarkdownFiles(dir: string): string[] {
+// excludePatterns / projectRoot mirror the build-side semantics from config.exclude
+// (gitignore-style globs). The same patterns are passed to findFilesRecursive,
+// which already implements the full matching logic used by generator.ts and i18n.ts.
+function findMarkdownFiles(dir: string, excludePatterns: string[] = [], projectRoot?: string): string[] {
   const results: string[] = [];
   try {
     const list = fs.readdirSync(dir);
     for (const file of list) {
       const fullPath = path.join(dir, file);
       const stat = fs.statSync(fullPath);
+
       if (stat && stat.isDirectory()) {
-        if (file !== 'node_modules' && !file.startsWith('.')) {
-          results.push(...findMarkdownFiles(fullPath));
-        }
+        if (file === 'node_modules' || file.startsWith('.')) continue;
+
+        // Apply exclude patterns to directories so we can prune whole subtrees
+        if (excludePatterns.length > 0 && isExcludedByPatterns(fullPath, file, excludePatterns, projectRoot)) continue;
+
+        results.push(...findMarkdownFiles(fullPath, excludePatterns, projectRoot));
       } else if (file.endsWith('.md') || file.endsWith('.markdown')) {
+        // Apply exclude patterns to individual files
+        if (excludePatterns.length > 0 && isExcludedByPatterns(fullPath, file, excludePatterns, projectRoot)) continue;
+
         results.push(fullPath);
       }
     }
@@ -42,11 +53,69 @@ function findMarkdownFiles(dir: string): string[] {
   return results;
 }
 
-export function validateLinks(docsDir: string): { file: string; line: number; link: string; error: string }[] {
+/** Escape special regex characters — used by isExcludedByPatterns. */
+function escapeRegex(s: string): string {
+  return s.replace(/[-+^$.|?*(){}[\]\\]/g, (ch) => `\\${ch}`);
+}
+
+/**
+ * Lightweight gitignore-style glob check that matches the build-side semantics
+ * from assets.ts isExcludedPath(). Supports exact name matches, suffix/prefix
+ * wildcards, `**` / `*` glob patterns, and anchored patterns (leading `/`).
+ */
+function isExcludedByPatterns(fullPath: string, name: string, patterns: string[], projectRoot?: string): boolean {
+  if (patterns.length === 0) return false;
+  const normalizedPath = fullPath.replace(/\\/g, '/');
+  const normalizedRoot = projectRoot ? path.resolve(projectRoot).replace(/\\/g, '/') : null;
+
+  for (const pat of patterns) {
+    const isAnchored = pat.startsWith('/');
+    let start = 0;
+    let end = pat.length;
+    while (start < end && pat.charCodeAt(start) === 47) start++;
+    while (end > start && pat.charCodeAt(end - 1) === 47) end--;
+    const cleanPat = pat.slice(start, end);
+    if (!cleanPat) continue;
+
+    if (isAnchored && normalizedRoot) {
+      const relPath = normalizedPath.startsWith(normalizedRoot + '/')
+        ? normalizedPath.slice(normalizedRoot.length + 1)
+        : null;
+      if (!relPath) continue;
+      if (relPath === cleanPat || relPath.startsWith(cleanPat + '/')) return true;
+      if (cleanPat.includes('*')) {
+        try {
+          const regexStr = escapeRegex(cleanPat).replace(/\.\*\./g, '.*').replace(/\*\*/g, '.*').replace(/(?<!\.)\*/g, '[^/]*');
+          const re = new RegExp(`^${regexStr}(/|$)`);
+          if (re.test(relPath)) return true;
+        } catch { /* ignore */ }
+      }
+      continue;
+    }
+
+    if (name === cleanPat) return true;
+    if (cleanPat.startsWith('*.') && name.endsWith(cleanPat.slice(1))) return true;
+    if (cleanPat.endsWith('*') && !cleanPat.includes('/') && name.startsWith(cleanPat.slice(0, -1))) return true;
+    if (normalizedPath.includes(`/${cleanPat}/`) || normalizedPath.endsWith(`/${cleanPat}`)) return true;
+
+    if (cleanPat.includes('*')) {
+      try {
+        const regexStr = escapeRegex(cleanPat).replace(/\.\*\./g, '.*').replace(/\*\*/g, '.*').replace(/(?<!\.)\*/g, '[^/]*');
+        const re = new RegExp(`(^|/)${regexStr}(/|$)`);
+        if (re.test(normalizedPath) || re.test(name)) return true;
+      } catch { /* ignore */ }
+    }
+  }
+  return false;
+}
+
+// excludePatterns is forwarded from config.exclude so that validate_docs
+// honours the same file set that the build produces. Fixes #245.
+export function validateLinks(docsDir: string, excludePatterns: string[] = []): { file: string; line: number; link: string; error: string }[] {
   const errors: { file: string; line: number; link: string; error: string }[] = [];
   if (!fs.existsSync(docsDir)) return errors;
 
-  const mdFiles = findMarkdownFiles(docsDir);
+  const mdFiles = findMarkdownFiles(docsDir, excludePatterns, docsDir);
 
   for (const filePath of mdFiles) {
     try {
@@ -337,7 +406,7 @@ export async function runMcpServer() {
               "Replace `~/.claude/skills` with the directory your agent reads skills from: `~/.cursor/skills` (Cursor), `./.skills` (project-local), etc. Run `npx docmd-skills --help` for the full subcommand list. The single install command pulls in the `docmd-skills`, `docmd-dev`, and `docmd-writer` skill modules — see https://github.com/docmd-io/docmd-skills for details.",
               "",
               "## Project-local override",
-              "This fallback content covers the general case. For project-specific instructions, create a `SKILL.md` at the root of the docmd project — `docmd mcp`'s `get_skill` tool returns that local file in preference to this fallback."
+              "This fallback content covers the general case. For project-specific instructions, create a `SKILL.md` at the root of the docmd project — the `docmd://context/skill` MCP resource returns that local file in preference to this fallback."
             ].join('\n');
           }
 
@@ -381,7 +450,8 @@ export async function runMcpServer() {
             return;
           }
 
-          const mdFiles = findMarkdownFiles(docsDir);
+          // Fix #245: use findFilesRecursive so that config.exclude is honoured
+          const mdFiles = await findFilesRecursive(docsDir, ['.md', '.markdown'], config.exclude || []);
           const matches: string[] = [];
 
           for (const filePath of mdFiles) {
@@ -431,7 +501,8 @@ export async function runMcpServer() {
             sendResponse(id, { content: [{ type: "text", text: `Error: Directory "${path.relative(process.cwd(), listRoot)}" does not exist.` }] });
             return;
           }
-          const files = findMarkdownFiles(listRoot).map(f => path.relative(process.cwd(), f));
+          // Fix #245: use findFilesRecursive so that config.exclude is honoured
+          const files = (await findFilesRecursive(listRoot, ['.md', '.markdown'], config.exclude || [])).map(f => path.relative(process.cwd(), f));
           const sorted = files.sort();
           const textResult = sorted.length > 0
             ? `Documentation files (${sorted.length}):\n${sorted.join('\n')}`
@@ -513,7 +584,8 @@ export async function runMcpServer() {
         }
 
         if (name === "validate_docs") {
-          const errors = validateLinks(docsDir);
+          // Fix #245: pass config.exclude so validate_docs agrees with the build
+          const errors = validateLinks(docsDir, config.exclude || []);
           if (errors.length === 0) {
             sendResponse(id, { content: [{ type: "text", text: "Documentation links validated successfully! No broken links found." }] });
           } else {

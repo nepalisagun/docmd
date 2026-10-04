@@ -1,7 +1,7 @@
 {
-  "name": "@docmd/engine-rust",
+  "name": "@docmd/engine-python",
   "version": "0.9.7",
-  "description": "Rust-accelerated engine for docmd. The postinstall script downloads a pre-built platform binary from npm CDN (unpkg/jsdelivr). No code is executed beyond copying the .node file. Source: https://github.com/docmd-io/docmd",
+  "description": "Python-accelerated engine for docmd using Python 3 runtime.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,13 +12,11 @@
     }
   },
   "scripts": {
-    "build": "tsc",
-    "postinstall": "node scripts/postinstall.cjs"
+    "build": "tsc"
   },
   "files": [
     "dist",
-    "scripts",
-    "bin"
+    "python"
   ],
   "engines": {
     "node": ">=20.0.0"
@@ -29,8 +27,7 @@
   "keywords": [
     "docmd",
     "engine",
-    "rust",
-    "native",
+    "python",
     "performance",
     "markdown",
     "minimalist",

@@ -2,7 +2,7 @@
   "title": "docmd 0.9.3 Playground",
   "src": "docs",
   "url": "https://docmd.io",
-  "engine": "js",
+  "engine": "python",
   "theme": {
     "name": "default"
   },

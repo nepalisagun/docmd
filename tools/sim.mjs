@@ -59,9 +59,16 @@ const __dirname = path.dirname(__filename);
 const MONOREPO_ROOT = path.resolve(__dirname, '..');
 
 const args = process.argv.slice(2);
-const SOURCE_FLAG = args.find((a) => a.startsWith('--source='));
-const SOURCE_DIR = SOURCE_FLAG
-  ? path.resolve(SOURCE_FLAG.slice('--source='.length))
+let sourceArg = null;
+const sourceIndex = args.findIndex((a) => a === '--source');
+if (sourceIndex !== -1 && args[sourceIndex + 1]) {
+  sourceArg = args[sourceIndex + 1];
+} else {
+  const sourceFlag = args.find((a) => a.startsWith('--source='));
+  if (sourceFlag) sourceArg = sourceFlag.slice('--source='.length);
+}
+const SOURCE_DIR = sourceArg
+  ? path.resolve(sourceArg)
   : (fs.existsSync(path.join(MONOREPO_ROOT, '_playground'))
       ? path.join(MONOREPO_ROOT, '_playground')
       : process.cwd());

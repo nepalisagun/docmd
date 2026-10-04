@@ -150,7 +150,14 @@ if (command !== 'stop' && !values.json) {
 if (command === 'init') {
   initProject({ force: values.force, yes: values.yes });
 } else if (command === 'build') {
-  buildSite(opts.config, { isDev: false, offline: opts.offline, verbose: opts.verbose });
+  buildSite(opts.config, { isDev: false, offline: opts.offline, verbose: opts.verbose })
+    .then(() => {
+      process.exit(0);
+    })
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    });
 } else if (command === 'dev') {
   startDevServer(opts.config, opts);
 } else if (command === 'live') {

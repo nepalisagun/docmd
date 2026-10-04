@@ -180,6 +180,11 @@ addInProcess(
   'Layout, theming, navigation, and SEO metadata contracts',
   await import('./cli-contracts/layout-theming.test.js')
 );
+addInProcess(
+  'engine-python',
+  'Python engine contracts (@docmd/engine-python + @docmd/api)',
+  await import('./cli-contracts/engine-python.test.js')
+);
 
 // --- Section 2: Container parser (Phase 2 PR 1+2+3) ----------------------
 addExternal(

@@ -110,7 +110,7 @@ function isExcludedByPatterns(fullPath: string, name: string, patterns: string[]
 }
 
 // excludePatterns is forwarded from config.exclude so that validate_docs
-// honours the same file set that the build produces. Fixes #245.
+// honours the same file set that the build produces.
 export function validateLinks(docsDir: string, excludePatterns: string[] = []): { file: string; line: number; link: string; error: string }[] {
   const errors: { file: string; line: number; link: string; error: string }[] = [];
   if (!fs.existsSync(docsDir)) return errors;
@@ -123,12 +123,61 @@ export function validateLinks(docsDir: string, excludePatterns: string[] = []): 
       const lines = content.split('\n');
       const relativeFile = path.relative(process.cwd(), filePath);
 
+      let inFence = false;
+      let fenceChar = '';
+      let fenceLength = 0;
+
       lines.forEach((lineText, lineIdx) => {
         const lineNum = lineIdx + 1;
-        const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+        const trimmedLeading = lineText.trimStart();
+
+        // Skip lines inside fenced code blocks (``` or ~~~).
+        // Fences allow up to 3 spaces of indentation.
+        const indentLength = lineText.length - trimmedLeading.length;
+        if (indentLength <= 3) {
+          if (inFence) {
+            const closeRegex = new RegExp(`^${fenceChar === '`' ? '`' : '~'}{${fenceLength},}\\s*$`);
+            if (closeRegex.test(trimmedLeading)) {
+              inFence = false;
+              fenceChar = '';
+              fenceLength = 0;
+            }
+            return;
+          }
+
+          const openMatch = trimmedLeading.match(/^(`{3,}|~{3,})/);
+          if (openMatch) {
+            inFence = true;
+            fenceChar = openMatch[1][0];
+            fenceLength = openMatch[1].length;
+            return;
+          }
+        } else if (inFence) {
+          return;
+        }
+
+        // Link text may be empty (`[](./image.jpg)`), so it is matched
+        // with `*`; requiring `+` silently skipped those links.
+        const linkRegex = /\[([^\]]*)\]\(([^)]+)\)/g;
         let match;
         while ((match = linkRegex.exec(lineText)) !== null) {
-          const linkTarget = match[2].trim().split('#')[0]; // strip anchors
+          let rawTarget = match[2].trim();
+
+          // Strip optional markdown link title and angle brackets
+          // e.g. `[text](guides/install.md "Install docmd")` or `[text](<guides/install.md> "Install")`
+          if (rawTarget.startsWith('<')) {
+            const closeIdx = rawTarget.indexOf('>');
+            if (closeIdx !== -1) {
+              rawTarget = rawTarget.slice(1, closeIdx);
+            }
+          } else {
+            const spaceIdx = rawTarget.search(/\s/);
+            if (spaceIdx !== -1) {
+              rawTarget = rawTarget.slice(0, spaceIdx);
+            }
+          }
+
+          const linkTarget = rawTarget.trim().split('#')[0]; // strip anchors
           if (!linkTarget) continue;
 
           // Skip external, anchors, mailto, etc.
@@ -163,7 +212,15 @@ export function validateLinks(docsDir: string, excludePatterns: string[] = []): 
             ? resolvedPath.slice(0, -1)
             : resolvedPath;
 
+          // The build copies the project-root `assets/` directory to `/assets/`
+          // in the site (engine/assets.ts), so an absolute `/assets/...` link
+          // is also valid when the file exists there.
+          const existsInRootAssets =
+            /^\/assets\//.test(linkTarget) &&
+            fs.existsSync(path.join(process.cwd(), linkTarget));
+
           const exists =
+            existsInRootAssets ||
             fs.existsSync(stripped) ||
             fs.existsSync(stripped + '.md') ||
             fs.existsSync(stripped + '.markdown') ||
@@ -450,7 +507,7 @@ export async function runMcpServer() {
             return;
           }
 
-          // Fix #245: use findFilesRecursive so that config.exclude is honoured
+          // Use findFilesRecursive so that config.exclude is honoured
           const mdFiles = await findFilesRecursive(docsDir, ['.md', '.markdown'], config.exclude || []);
           const matches: string[] = [];
 
@@ -501,7 +558,7 @@ export async function runMcpServer() {
             sendResponse(id, { content: [{ type: "text", text: `Error: Directory "${path.relative(process.cwd(), listRoot)}" does not exist.` }] });
             return;
           }
-          // Fix #245: use findFilesRecursive so that config.exclude is honoured
+          // Use findFilesRecursive so that config.exclude is honoured
           const files = (await findFilesRecursive(listRoot, ['.md', '.markdown'], config.exclude || [])).map(f => path.relative(process.cwd(), f));
           const sorted = files.sort();
           const textResult = sorted.length > 0
@@ -584,7 +641,7 @@ export async function runMcpServer() {
         }
 
         if (name === "validate_docs") {
-          // Fix #245: pass config.exclude so validate_docs agrees with the build
+          // Pass config.exclude so validate_docs agrees with the build
           const errors = validateLinks(docsDir, config.exclude || []);
           if (errors.length === 0) {
             sendResponse(id, { content: [{ type: "text", text: "Documentation links validated successfully! No broken links found." }] });

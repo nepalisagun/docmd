@@ -65,6 +65,100 @@ export const test = runTestFile({
       assert(code === 1, 'M-1: genuinely broken link still exits 1');
     }
 
+    // A link with empty text (`[](./missing.jpg)`) must still be
+    // validated. Pre-fix the link regex required at least one character
+    // between the brackets, so these links were silently skipped.
+    {
+      const dir = setup('validate-workspace-empty-text-broken');
+      writeFile(dir, 'docs/index.md', '# P1\n\n[](./missing.jpg)\n');
+      const code = exitCodeOf(`node ${DOCMD} validate`, dir);
+      assert(code === 1, 'broken link with empty text exits 1');
+    }
+
+    {
+      const dir = setup('validate-workspace-empty-text-ok');
+      writeFile(dir, 'docs/index.md', '# P1\n\n[](./page-2.md)\n');
+      writeFile(dir, 'docs/page-2.md', '# P2\n');
+      const code = exitCodeOf(`node ${DOCMD} validate`, dir);
+      assert(code === 0, 'valid link with empty text exits 0');
+    }
+
+    // The build copies the project-root `assets/` directory to
+    // `/assets/` in the site, so `/assets/...` links resolve there and
+    // must not be reported as broken just because `docs/assets/` is empty.
+    {
+      const dir = setup('validate-workspace-root-assets-ok');
+      writeFile(dir, 'docs/index.md', '# P1\n\n[Screenshot](/assets/images/screenshot.jpg)\n');
+      writeFile(dir, 'assets/images/screenshot.jpg', 'jpg');
+      const code = exitCodeOf(`node ${DOCMD} validate`, dir);
+      assert(code === 0, '/assets/ link to project-root assets/ file exits 0');
+    }
+
+    {
+      const dir = setup('validate-workspace-root-assets-missing');
+      writeFile(dir, 'docs/index.md', '# P1\n\n[Screenshot](/assets/images/missing.jpg)\n');
+      writeFile(dir, 'assets/images/screenshot.jpg', 'jpg');
+      const code = exitCodeOf(`node ${DOCMD} validate`, dir);
+      assert(code === 1, '/assets/ link to a missing file still exits 1');
+    }
+
+    // Links with titles (e.g. `[text](url "title")` or `[text](<url> "title")`)
+    // must strip the title instead of treating `"title"` as part of the filename.
+    {
+      const dir = setup('validate-workspace-link-title-ok');
+      writeFile(dir, 'docs/index.md', '# P1\n\nSee [install](guides/install.md "Install docmd") and [guide](<guides/install.md> \'Guide\').\n');
+      writeFile(dir, 'docs/guides/install.md', '# Install\n');
+      const code = exitCodeOf(`node ${DOCMD} validate`, dir);
+      assert(code === 0, 'links with titles to existing target exit 0');
+    }
+
+    {
+      const dir = setup('validate-workspace-link-title-broken');
+      writeFile(dir, 'docs/index.md', '# P1\n\n[bad](guides/missing.md "Missing guide")\n');
+      const code = exitCodeOf(`node ${DOCMD} validate`, dir);
+      assert(code === 1, 'links with titles to missing target still exit 1');
+    }
+
+    // Links inside fenced code blocks (``` or ~~~) must be ignored.
+    {
+      const dir = setup('validate-workspace-code-fences-ok');
+      const content = [
+        '# Home',
+        '',
+        '```md',
+        'Example link in code sample: [sample](./not-a-real-page.md)',
+        '```',
+        '',
+        '~~~js',
+        '// [fake link](./fake.md)',
+        '~~~',
+        '',
+        '[real link](./page-2.md)',
+        ''
+      ].join('\n');
+      writeFile(dir, 'docs/index.md', content);
+      writeFile(dir, 'docs/page-2.md', '# Page 2\n');
+      const code = exitCodeOf(`node ${DOCMD} validate`, dir);
+      assert(code === 0, 'links inside fenced code blocks are skipped (exit 0)');
+    }
+
+    {
+      const dir = setup('validate-workspace-code-fences-broken-outside');
+      const content = [
+        '# Home',
+        '',
+        '```md',
+        'Sample: [sample](./not-a-real-page.md)',
+        '```',
+        '',
+        '[broken link outside fence](./broken.md)',
+        ''
+      ].join('\n');
+      writeFile(dir, 'docs/index.md', content);
+      const code = exitCodeOf(`node ${DOCMD} validate`, dir);
+      assert(code === 1, 'broken link outside fence still caught (exit 1)');
+    }
+
     // F8 — workspace validation errors exit 1 with a clean TUI message,
     // not a raw stack trace.
     {

@@ -91,7 +91,10 @@ function detectHeuristics(cwd: string, srcDir: string) {
     es: 'Español',
     ru: 'Русский',
     it: 'Italiano',
-    pt: 'Português'
+    pt: 'Português',
+    tr: 'Türkçe',
+    hi: 'हिन्दी',
+    ko: '한국어'
   };
 
   const isVersion = (name: string) => /^v\d/i.test(name);
@@ -514,7 +517,7 @@ export async function loadConfig(configPath: string, options: any = {}) {
           // self-normalises via normalizeInternalHref, so this is the only
           // nav source that previously bypassed trailing-slash / external
           // detection — which leaked slash-less paths into the sidebar and
-          // prev/next while markdown content kept its slash (#181).
+          // prev/next while markdown content kept its slash.
           normalizeNavPaths(normalized.navigation);
         } catch (e: any) {
           TUI.error('Navigation Error', `Failed to parse ${localNavPath}: ${e.message}`);

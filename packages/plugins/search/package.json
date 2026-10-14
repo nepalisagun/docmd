@@ -1,6 +1,6 @@
 {
   "name": "@docmd/plugin-search",
-  "version": "0.9.7",
+  "version": "0.9.8",
   "description": "Offline full-text search for docmd.",
   "type": "module",
   "main": "dist/index.js",
@@ -44,7 +44,7 @@
   "devDependencies": {
     "@docmd/api": "workspace:*",
     "@types/markdown-it": "^14.2.0",
-    "@types/node": "^24.19.0",
+    "@types/node": "^24.19.2",
     "esbuild": "^0.28.2"
   },
   "keywords": [

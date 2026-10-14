@@ -33,7 +33,7 @@ const require = createRequire(import.meta.url);
 
 export const plugin: PluginDescriptor = {
   name: 'search',
-  version: '0.9.7',
+  version: '0.9.8',
   // `init` lets onConfigResolved run at config-parse time — that's where we
   // compute the single `searchConfig` object. The build pipeline reads
   // it from `config._searchConfig` everywhere else, so there's exactly
@@ -174,7 +174,7 @@ function manualResolvePackageDir(packageName: string, startDirs: string[]): stri
  * Returns the importable path (file:// URL) or null if not found.
  */
 function resolveDocmdSearch(): string | null {
-  // #163 (deeper fix): previously this walked `__dirname` and two parent
+  // Previously this walked `__dirname` and two parent
   // directories, which let `docmd-search` resolve into the monorepo's
   // own node_modules when the user runs the binary through a pnpm/npm
   // symlink. The plugin then thought the user's project had it installed,
@@ -262,7 +262,7 @@ async function getLatestDocmdSearchVersion(): Promise<string> {
 const PEER_DEPS = [
   '@huggingface/transformers@^4.2.0',
   'onnxruntime-node@^1.27.0',
-  'sharp@^0.35.4'
+  'sharp@^0.35.5'
 ];
 
 /**
@@ -683,7 +683,7 @@ export async function onPostBuild({ config, pages, outputDir, tui, options, runW
     if (!ready) {
       // Graceful fallback: build keyword index instead. The `reason` field
       // tells the caller whether docmd-search itself or just its peers were
-      // missing so the message is accurate (#163 deeper fix: previously it
+      // missing so the message is accurate (previously it
       // always said "docmd-search not installed" even when only a peer
       // was missing).
       const why =

@@ -47,7 +47,7 @@ import nativeFs from 'fs';
 const _require = createRequire(import.meta.url);
 import * as parser from '@docmd/parser';
 import { TUI } from '@docmd/tui';
-import { findPageNeighbors, findBreadcrumbs, normalizeNavPaths, createUrlContext, buildContextualUrl, buildAbsoluteContextualUrl, computePageUrls, sanitizeUrl, normaliseBaseTag } from '@docmd/parser';
+import { findPageNeighbors, findBreadcrumbs, normalizeNavPaths, createUrlContext, buildContextualUrl, buildAbsoluteContextualUrl, computePageUrls, sanitizeUrl, normaliseBaseTag, VariableRegistry, interpolateConfigVariables } from '@docmd/parser';
 import * as ui from '@docmd/ui';
 import type { ResolvedAsset } from '@docmd/api';
 
@@ -117,6 +117,32 @@ interface RenderPagesOptions {
 export async function renderPages({ config, srcDir, fallbackSrcDir, outputDir, hooks, buildHash, options, outputPrefix = '', coreVersion, onProgress, targetFiles, resolvedAssets }: RenderPagesOptions) {
   // Reset git root cache (cwd may have changed between workspace builds)
   _cachedGitRoot = null;
+
+  let gitCommit = '';
+  let gitBranch = '';
+  try {
+    const gitRoot = getGitRoot() || process.cwd();
+    gitCommit = execSync('git rev-parse --short HEAD', { cwd: gitRoot, stdio: ['pipe', 'pipe', 'ignore'], encoding: 'utf8' }).trim();
+    gitBranch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: gitRoot, stdio: ['pipe', 'pipe', 'ignore'], encoding: 'utf8' }).trim();
+  } catch {
+    gitCommit = '';
+    gitBranch = '';
+  }
+
+  // Initialize VariableRegistry for this build phase
+  const variableRegistry = new VariableRegistry({
+    configVariables: config.variables,
+    siteTitle: config.title || config.siteTitle,
+    siteBase: config.base,
+    cwd: process.cwd(),
+    version: coreVersion || CORE_VERSION,
+    gitCommit,
+    gitBranch
+  });
+  config._variableRegistry = variableRegistry;
+
+  // Interpolate dynamic variables in config strings (footer copyright, banners, titles)
+  config = interpolateConfigVariables(config, variableRegistry);
 
   // Load Translations for the active locale
   const localeId = config._activeLocale?.id || null;
@@ -465,6 +491,11 @@ export async function renderPages({ config, srcDir, fallbackSrcDir, outputDir, h
           outputPrefix: outputPrefix,
           config: { base: config.base || '/' },
           pathname: pageUrlsForMarkdown.pathname,
+          variableRegistry,
+          slug: withoutExt,
+          pageSlug: withoutExt,
+          pagePath: pageUrlsForMarkdown.pathname || ('/' + htmlOutputPath.replace(/\/index\.html$/, '').replace(/^index\.html$/, '')),
+          path: pageUrlsForMarkdown.pathname || ('/' + htmlOutputPath.replace(/\/index\.html$/, '').replace(/^index\.html$/, ''))
         },
         hooks
       );

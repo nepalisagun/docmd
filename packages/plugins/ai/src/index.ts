@@ -22,7 +22,7 @@ import { DocmdAssistantEngine, createStandardTools } from 'docmd-assistant';
 
 export const plugin: PluginDescriptor = {
   name: 'ai',
-  version: '0.9.8',
+  version: '0.9.9',
   capabilities: ['init', 'body', 'assets', 'actions', 'translations', 'post-build']
 };
 
@@ -60,6 +60,8 @@ export interface AIPluginOptions {
   };
   messageActions?: boolean;
   allowEdit?: boolean;
+  fetchExternalUrls?: boolean;
+  allowExternalUrls?: boolean;
 }
 
 /** Default system prompt for documentation assistant */
@@ -121,7 +123,8 @@ export async function onConfigResolved(config: any): Promise<void> {
     rateLimit: {
       maxRequests: pluginOptions.rateLimit?.maxRequests || 10,
       windowMs: pluginOptions.rateLimit?.windowMs || 60000
-    }
+    },
+    fetchExternalUrls: pluginOptions.fetchExternalUrls ?? pluginOptions.allowExternalUrls ?? false
   };
 
   config._aiConfig = _resolvedOptions;
@@ -306,10 +309,11 @@ export const actions = {
     const engine = new DocmdAssistantEngine({
       endpoint: opts.endpoint || 'https://api.docmd.io/v1/ai/chat',
       projectId: opts.projectId || opts.siteId,
+      fetchExternalUrls: opts.fetchExternalUrls ?? opts.allowExternalUrls ?? false,
       provider: opts.provider,
       model: opts.model,
       systemPrompt: opts.systemPrompt
-    });
+    } as any);
 
     const isSemanticUsable = ctx.config._searchConfig?.semanticUsable === true;
 
@@ -408,7 +412,8 @@ export function generateScripts(config: any, _options?: any): { headScriptsHtml:
     },
     isWorkspace: workspaceProjects.length > 0,
     workspaceProjects,
-    messageActions: pluginOptions.messageActions === true
+    messageActions: pluginOptions.messageActions === true,
+    fetchExternalUrls: pluginOptions.fetchExternalUrls ?? pluginOptions.allowExternalUrls ?? false
   };
   if (pluginOptions.provider) clientConfig.provider = pluginOptions.provider;
   if (pluginOptions.model) clientConfig.model = pluginOptions.model;

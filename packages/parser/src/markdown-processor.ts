@@ -21,6 +21,7 @@ import {
   type NormaliserWarning
 } from './utils/container-normaliser.js';
 import { rewriteHtmlLinks, createUrlContext } from './utils/url-utils.js';
+import { VariableRegistry, interpolateVariables, type VariableContext } from './variables/index.js';
 
 // URL schemes that can execute code or exfiltrate data when clicked.
 // Phase 1.B (T-S4 fix, defense in depth): markdown-it 14 already rejects these
@@ -214,11 +215,38 @@ function createMarkdownProcessor(config: any = {}, pluginsCallback: any) {
   };
 
   // Syntax Highlighting (title extraction is handled separately in the fence renderer)
+  const highlightWithPlaceholders = (str: string, fn: (clean: string) => string) => {
+    const varPattern = /<span data-docmd-var="([^"]+)" class="docmd-var">([\s\S]*?)<\/span>/g;
+    const placeholders: Array<{ token: string; html: string }> = [];
+    let cleanStr = str;
+
+    if (typeof str === 'string' && str.includes('data-docmd-var=')) {
+      let counter = 0;
+      cleanStr = str.replace(varPattern, (match) => {
+        const token = `__DOCMD_VAR_TOK_${counter++}__`;
+        placeholders.push({ token, html: match });
+        return token;
+      });
+    }
+
+    let rendered = fn(cleanStr);
+
+    if (placeholders.length > 0) {
+      for (const p of placeholders) {
+        rendered = rendered.replaceAll(p.token, p.html);
+      }
+    }
+
+    return rendered;
+  };
+
   const highlightFn = (str: any, lang: any) => {
     if (lang === 'mermaid') {
       return `<pre class="mermaid">${new MarkdownIt().utils.escapeHtml(str)}</pre>`;
     }
-    const highlighted = highlight(str, { language: lang, mimicHljs: true }).value;
+    const highlighted = highlightWithPlaceholders(str, (clean) => {
+      return highlight(clean, { language: lang, mimicHljs: true }).value;
+    });
     // Tag the code with language-xxx so consumers (e.g. the summer
     // template's codeblock title bar) can pick up the language.
     const langAttr = lang ? ` class="language-${lang}"` : '';
@@ -228,10 +256,25 @@ function createMarkdownProcessor(config: any = {}, pluginsCallback: any) {
   mdOptions.highlight = config.theme?.codeHighlight !== false ? highlightFn : (str: any, lang: any) => {
     if (lang === 'mermaid') return `<pre class="mermaid">${new MarkdownIt().utils.escapeHtml(str)}</pre>`;
     const langAttr = lang ? ` class="language-${lang}"` : '';
-    return `<pre><code${langAttr}>${new MarkdownIt().utils.escapeHtml(str)}</code></pre>`;
+    const escaped = highlightWithPlaceholders(str, (clean) => new MarkdownIt().utils.escapeHtml(clean));
+    return `<pre><code${langAttr}>${escaped}</code></pre>`;
   };
 
   const md = new MarkdownIt(mdOptions);
+
+  const defaultCodeInline = md.renderer.rules.code_inline || function (tokens: any, idx: any, options: any, env: any, self: any) {
+    return self.renderToken(tokens, idx, options);
+  };
+  md.renderer.rules.code_inline = function (tokens: any, idx: any, options: any, env: any, self: any) {
+    let rendered = defaultCodeInline(tokens, idx, options, env, self);
+    if (rendered.includes('&lt;span data-docmd-var=')) {
+      rendered = rendered.replace(
+        /&lt;span data-docmd-var=&quot;([^&]+)&quot; class=&quot;docmd-var&quot;&gt;([\s\S]*?)&lt;\/span&gt;/g,
+        '<span data-docmd-var="$1" class="docmd-var">$2</span>'
+      );
+    }
+    return rendered;
+  };
 
   // Linkify-it's default normalizer prepends http:// when match.schema is empty.
   // Explicit protocols (http://, mailto:, etc.) have a non-empty schema and are left intact.
@@ -514,6 +557,29 @@ function processContent(rawString: any, mdInstance: any, config: any, env: any =
     if (h1Match) frontmatter.title = h1Match[1].trim();
   }
 
+  // Interpolate variables (builtins, env, config, frontmatter)
+  const registry: VariableRegistry = env?.variableRegistry || config?._variableRegistry || new VariableRegistry({
+    configVariables: config?.variables,
+    siteTitle: config?.title || config?.siteTitle,
+    siteBase: config?.base
+  });
+
+  const varContext: VariableContext = {
+    pageTitle: frontmatter.title,
+    pageSlug: env?.pageSlug || env?.slug || env?.withoutExt,
+    pagePath: env?.pagePath || env?.path || env?.pathname || env?.filePath,
+    frontmatter
+  };
+
+  if (frontmatter.title && typeof frontmatter.title === 'string' && frontmatter.title.includes('{{')) {
+    frontmatter.title = interpolateVariables(frontmatter.title, registry, varContext, { wrapDynamic: false });
+  }
+  if (frontmatter.description && typeof frontmatter.description === 'string' && frontmatter.description.includes('{{')) {
+    frontmatter.description = interpolateVariables(frontmatter.description, registry, varContext, { wrapDynamic: false });
+  }
+
+  markdownContent = interpolateVariables(markdownContent, registry, varContext);
+
   // Phase 2 (F1–F5): rewrite unbalanced `:::` containers so the existing
   // depth-tracking block rule in features/common-containers.ts always sees
   // a matching close.
@@ -545,6 +611,34 @@ async function processContentAsync(rawString: string, mdInstance: any, config: a
     console.error('Error parsing frontmatter:', e.message);
     return null;
   }
+
+  if (!frontmatter.title && config.autoTitleFromH1 !== false) {
+    const h1Match = markdownContent.match(/^#\s+(.*)/m);
+    if (h1Match) frontmatter.title = h1Match[1].trim();
+  }
+
+  // Interpolate variables (builtins, env, config, frontmatter)
+  const registryAsync: VariableRegistry = env?.variableRegistry || config?._variableRegistry || new VariableRegistry({
+    configVariables: config?.variables,
+    siteTitle: config?.title || config?.siteTitle,
+    siteBase: config?.base
+  });
+
+  const varContextAsync: VariableContext = {
+    pageTitle: frontmatter.title,
+    pageSlug: env?.pageSlug || env?.slug || env?.withoutExt,
+    pagePath: env?.pagePath || env?.path || env?.pathname || env?.filePath,
+    frontmatter
+  };
+
+  if (frontmatter.title && typeof frontmatter.title === 'string' && frontmatter.title.includes('{{')) {
+    frontmatter.title = interpolateVariables(frontmatter.title, registryAsync, varContextAsync, { wrapDynamic: false });
+  }
+  if (frontmatter.description && typeof frontmatter.description === 'string' && frontmatter.description.includes('{{')) {
+    frontmatter.description = interpolateVariables(frontmatter.description, registryAsync, varContextAsync, { wrapDynamic: false });
+  }
+
+  markdownContent = interpolateVariables(markdownContent, registryAsync, varContextAsync);
 
   // Phase 2 (F1–F5): rewrite unbalanced `:::` containers BEFORE user plugins
   // so they always see balanced input, and BEFORE markdown-it so the

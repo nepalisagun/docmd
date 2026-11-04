@@ -15,8 +15,17 @@
 import { createMarkdownProcessor, processContent } from '@docmd/parser/dist/markdown-processor.js';
 import { markdownSetup as mathMarkdownSetup } from '@docmd/plugin-math';
 import { markdownSetup as mermaidMarkdownSetup } from '@docmd/plugin-mermaid';
+import { markdownSetup as playgroundMarkdownSetup } from '@docmd/plugin-playground';
 // @ts-expect-error virtual module
 import templates from 'virtual:docmd-templates';
+
+declare const __DOCMD_VERSION__: string;
+const LIVE_VERSION = typeof __DOCMD_VERSION__ !== 'undefined' ? __DOCMD_VERSION__ : '0.9.9';
+
+if (typeof window !== 'undefined') {
+    (window as any).docmd = (window as any).docmd || {};
+    (window as any).docmd.version = LIVE_VERSION;
+}
 
 // Expose the compile function to the window.docmd global
 async function compile(markdown: string, config: any = {}) {
@@ -34,13 +43,17 @@ async function compile(markdown: string, config: any = {}) {
 
         // Mermaid (container ::: mermaid and fence ```mermaid)
         mermaidMarkdownSetup(parser);
+
+        // Playground (container ::: playground and fence ```* playground)
+        playgroundMarkdownSetup(parser);
     });
     const result = processContent(markdown, md, defaults);
 
     if (!result) return '<p>Error parsing markdown</p>';
 
-    // Since we are in the browser, we assume assets are served at ./assets/
-    const assetsRoot = './assets';
+    // Dynamic assets root based on route depth (works on root domain and subpaths)
+    const hasSubpath = typeof window !== 'undefined' && window.location.pathname.replace(/^\/+|\/+$/g, '').length > 0;
+    const assetsRoot = hasSubpath ? '../assets' : './assets';
     const appearance = defaults.theme.appearance || 'light';
 
     // Theme init script for live preview — defaults to light, honors explicit 'docmd-live-theme' toggle
@@ -112,17 +125,43 @@ async function compile(markdown: string, config: any = {}) {
     <\/script>
     `;
 
+    const hasPlayground = result.htmlContent.includes('docmd-playground');
+    const playgroundCss = hasPlayground ? `<link rel="stylesheet" href="${assetsRoot}/css/docmd-playground.css">` : '';
+    const playgroundScript = hasPlayground ? `<script src="${assetsRoot}/js/docmd-playground.js"></script>` : '';
+
     return `<!DOCTYPE html>
 <html lang="en" data-theme="${appearance}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${result.frontmatter.title || 'Live Preview'}</title>
-    <script>window.DOCMD_APPEARANCE = "${appearance}";</script>
+    <script>
+        window.DOCMD_APPEARANCE = "${appearance}";
+        window.docmd = window.docmd || {};
+        window.docmd.version = "${LIVE_VERSION}";
+        window.docmd.var = window.docmd.var || {
+            _store: {
+                docmd: { version: "${LIVE_VERSION}", buildYear: String(new Date().getFullYear()) },
+                version: "${LIVE_VERSION}",
+                DOCMD_VERSION: "${LIVE_VERSION}"
+            },
+            get: function(k) {
+                if (!k || typeof k !== 'string') return undefined;
+                if (k in this._store) return this._store[k];
+                if (k === 'docmd.version') return this._store.docmd.version;
+                if (k === 'docmd.buildYear') return this._store.docmd.buildYear;
+                if (k === 'docmd') return this._store.docmd;
+                return undefined;
+            },
+            set: function(k, v) { this._store[k] = v; },
+            all: function() { return this._store; }
+        };
+    </script>
     <script>${themeInitScript}</script>
     <link rel="stylesheet" href="${assetsRoot}/css/docmd-main.css?v=live">
     <link rel="stylesheet" href="${assetsRoot}/css/docmd-live-preview.css">
     ${katexCss}
+    ${playgroundCss}
     <style>
         body { max-width: 880px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
         body > :first-child { margin-top: 0; }
@@ -132,6 +171,7 @@ async function compile(markdown: string, config: any = {}) {
 ${result.htmlContent}
 ${interactivityScript}
 ${mermaidScript}
+${playgroundScript}
 </body>
 </html>`;
 }

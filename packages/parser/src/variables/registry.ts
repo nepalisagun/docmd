@@ -12,6 +12,8 @@
  * --------------------------------------------------------------------
  */
 
+import { createRequire } from 'node:module';
+
 export interface VariableContext {
   pageTitle?: string;
   pageSlug?: string;
@@ -32,6 +34,15 @@ export interface VariableRegistryOptions {
   gitBranch?: string;
 }
 
+let _nodeRequire: any = null;
+try {
+  if (typeof process !== 'undefined' && process.versions?.node) {
+    _nodeRequire = createRequire(import.meta.url);
+  }
+} catch {
+  _nodeRequire = null;
+}
+
 /**
  * Cache git metadata once per build process so we don't spawn child processes repeatedly.
  */
@@ -43,19 +54,12 @@ function getGitMetadata(cwd: string, optionsCommit?: string, optionsBranch?: str
   if (optionsCommit !== undefined || optionsBranch !== undefined) {
     return { commit: optionsCommit || '', branch: optionsBranch || '' };
   }
-  if (_gitAttempted && _cachedGitCommit) {
+  if (_gitAttempted && _cachedGitCommit !== null) {
     return { commit: _cachedGitCommit, branch: _cachedGitBranch || '' };
   }
-  if (typeof process !== 'undefined' && process.versions?.node) {
+  if (_nodeRequire) {
     try {
-      let cp: any = null;
-      try {
-        const { createRequire } = Function('return import("node:module")')();
-        // createRequire is async when imported dynamically
-      } catch { /* ignore */ }
-      if (typeof require !== 'undefined') {
-        cp = require('child_process');
-      }
+      const cp = _nodeRequire('child_process');
       if (cp && cp.execSync) {
         _cachedGitCommit = cp.execSync('git rev-parse --short HEAD', { cwd, stdio: ['pipe', 'pipe', 'ignore'], encoding: 'utf8' }).trim();
         _cachedGitBranch = cp.execSync('git rev-parse --abbrev-ref HEAD', { cwd, stdio: ['pipe', 'pipe', 'ignore'], encoding: 'utf8' }).trim();
@@ -64,6 +68,9 @@ function getGitMetadata(cwd: string, optionsCommit?: string, optionsBranch?: str
       _cachedGitCommit = '';
       _cachedGitBranch = '';
     }
+  } else {
+    _cachedGitCommit = '';
+    _cachedGitBranch = '';
   }
   _gitAttempted = true;
   return { commit: _cachedGitCommit || '', branch: _cachedGitBranch || '' };
@@ -96,7 +103,7 @@ export class VariableRegistry {
   private version: string;
 
   constructor(options: VariableRegistryOptions = {}) {
-    this.cwd = options.cwd || process.cwd();
+    this.cwd = options.cwd || (typeof process !== 'undefined' && typeof process.cwd === 'function' ? process.cwd() : '/');
     this.version = options.version || '0.9.9';
     this.initBaseVariables(options);
     this.loadConfigVariables(options.configVariables);
@@ -162,11 +169,10 @@ export class VariableRegistry {
     if (!configVars) return;
 
     if (typeof configVars === 'string') {
-      if (typeof process !== 'undefined' && process.versions?.node) {
+      if (_nodeRequire) {
         try {
-          const req = Function('return require')();
-          const pathMod = req('path');
-          const fsMod = req('fs');
+          const pathMod = _nodeRequire('path');
+          const fsMod = _nodeRequire('fs');
           const filePath = pathMod.isAbsolute(configVars) ? configVars : pathMod.resolve(this.cwd, configVars);
           if (fsMod.existsSync(filePath)) {
             if (filePath.endsWith('.json')) {
@@ -256,5 +262,49 @@ export class VariableRegistry {
       ...(context?.frontmatter || {}),
       ...(context ? { page: { title: context.pageTitle, slug: context.pageSlug, path: context.pagePath } } : {})
     };
+  }
+
+  /**
+   * Get dictionary of variables safe for client-side embedding.
+   * Excludes raw process.env system dictionary for security.
+   */
+  public getClientVariables(context?: VariableContext): Record<string, any> {
+    const clientVars: Record<string, any> = {
+      docmd: this.baseVariables['docmd'] || {},
+      DOCMD_VERSION: this.baseVariables['DOCMD_VERSION'],
+      BUILD_YEAR: this.baseVariables['BUILD_YEAR'],
+      BUILD_DATE: this.baseVariables['BUILD_DATE'],
+      GIT_COMMIT: this.baseVariables['GIT_COMMIT'],
+      GIT_BRANCH: this.baseVariables['GIT_BRANCH'],
+      git: this.baseVariables['git'] || {},
+      site: this.baseVariables['site'] || {},
+      ...this.configVariables
+    };
+
+    // Promote DOCMD_VAR_* keys (safe by design since author explicitly opted into DOCMD_VAR_)
+    for (const [k, v] of Object.entries(this.baseVariables)) {
+      if (k.startsWith('DOCMD_VAR_')) {
+        clientVars[k] = v;
+      }
+    }
+
+    if (context) {
+      clientVars.page = {
+        title: context.pageTitle,
+        slug: context.pageSlug,
+        path: context.pagePath
+      };
+      if (context.frontmatter) {
+        clientVars.frontmatter = context.frontmatter;
+        if (context.frontmatter.variables && typeof context.frontmatter.variables === 'object') {
+          Object.assign(clientVars, context.frontmatter.variables);
+        }
+        if (context.frontmatter.vars && typeof context.frontmatter.vars === 'object') {
+          Object.assign(clientVars, context.frontmatter.vars);
+        }
+      }
+    }
+
+    return clientVars;
   }
 }

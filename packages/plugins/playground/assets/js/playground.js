@@ -40,8 +40,12 @@
     constructor(container) {
       this.container = container;
       this.lang = (container.getAttribute('data-lang') || 'js').toLowerCase();
-      this.initialCode = container.querySelector('.docmd-playground-initial-code')?.textContent || '';
+      const template = container.querySelector('.docmd-playground-initial-code');
+      const templateCode = template ? (template.content ? template.content.textContent : (template.textContent || template.innerHTML)) : '';
       this.editor = container.querySelector('.docmd-playground-editor');
+      this.initialCode = (this.editor && typeof this.editor.defaultValue === 'string' && this.editor.defaultValue.length > 0)
+        ? this.editor.defaultValue
+        : (templateCode || '').trim();
       this.consoleEl = container.querySelector('.docmd-playground-console');
       this.previewEl = container.querySelector('.docmd-playground-preview');
       this.runBtn = container.querySelector('.docmd-playground-run-btn');
@@ -58,8 +62,10 @@
 
     init() {
       if (this.editor && !this.editor.value) {
-        this.editor.value = this.initialCode.trim();
+        this.editor.value = this.initialCode;
       }
+
+      this.defaultTab = (this.container.getAttribute('data-default-tab') || (this.lang === 'html' || this.lang === 'xml' || this.lang === 'svg' ? 'preview' : 'console')).toLowerCase();
 
       this.bindEditorEvents();
       this.bindActions();
@@ -68,6 +74,12 @@
 
       // Show empty console hint initially
       this.renderEmptyConsole();
+
+      // Automatically render preview on init if HTML/SVG or default tab is preview so preview tab is never blank
+      if (this.lang === 'html' || this.lang === 'xml' || this.lang === 'svg' || this.defaultTab === 'preview') {
+        this.renderHtmlPreview(this.editor ? this.editor.value : this.initialCode);
+        this.switchTab(this.defaultTab);
+      }
 
       // Auto-run if data-live="true" or data-autorun="true"
       if (this.container.getAttribute('data-live') === 'true' || this.container.getAttribute('data-autorun') === 'true') {
@@ -99,7 +111,10 @@
 
     bindActions() {
       if (this.runBtn) {
-        this.runBtn.addEventListener('click', () => this.run());
+        this.runBtn.addEventListener('click', () => {
+          this.run();
+          this.switchView('live');
+        });
       }
       if (this.resetBtn) {
         this.resetBtn.addEventListener('click', () => this.reset());
@@ -136,7 +151,12 @@
         t.classList.toggle('active', t.getAttribute('data-view') === viewName);
       });
       if (viewName === 'live') {
-        if (!this.hasRun) {
+        if (this.lang === 'html' || this.lang === 'xml' || this.lang === 'svg' || this.defaultTab === 'preview') {
+          const hasIframe = Boolean(this.previewEl && this.previewEl.querySelector('iframe'));
+          if (!hasIframe) {
+            this.renderHtmlPreview(this.editor ? this.editor.value : this.initialCode);
+          }
+        } else if (!this.hasRun) {
           this.run();
         }
       }
@@ -149,6 +169,15 @@
       this.panels.forEach((p) => {
         p.classList.toggle('active', p.getAttribute('data-panel') === tabName);
       });
+
+      // Auto-render preview if switched to preview and preview is currently empty
+      if (tabName === 'preview') {
+        const hasIframe = Boolean(this.previewEl && this.previewEl.querySelector('iframe'));
+        if (!hasIframe) {
+          const code = this.editor ? this.editor.value : this.initialCode;
+          this.renderHtmlPreview(code);
+        }
+      }
     }
 
     renderEmptyConsole() {
@@ -259,45 +288,47 @@
       const iframe = document.createElement('iframe');
       iframe.setAttribute('sandbox', 'allow-scripts allow-modals allow-forms');
       iframe.style.width = '100%';
-      iframe.style.height = '100%';
+      iframe.style.minHeight = '200px';
       iframe.style.border = 'none';
+      iframe.style.background = '#ffffff';
+      iframe.style.display = 'block';
+
+      iframe.srcdoc = `<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        color: #0f172a;
+        background: #ffffff;
+        box-sizing: border-box;
+      }
+      * { box-sizing: border-box; }
+    </style>
+  </head>
+  <body>
+    ${html}
+  </body>
+</html>`;
 
       this.previewEl.appendChild(iframe);
-
-      const doc = iframe.contentDocument || iframe.contentWindow?.document;
-      if (doc) {
-        doc.open();
-        doc.write(`
-          <!DOCTYPE html>
-          <html>
-            <head>
-              <meta charset="utf-8">
-              <style>
-                body {
-                  margin: 0;
-                  padding: 12px;
-                  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                  color: #0f172a;
-                  background: #ffffff;
-                }
-              </style>
-            </head>
-            <body>
-              ${html}
-            </body>
-          </html>
-        `);
-        doc.close();
-      }
     }
 
     reset() {
       if (this.editor) {
-        this.editor.value = this.initialCode.trim();
+        this.editor.value = this.initialCode;
       }
       this.clearConsole();
       if (this.previewEl) {
-        this.previewEl.innerHTML = '';
+        if (this.lang === 'html' || this.lang === 'xml' || this.lang === 'svg' || this.defaultTab === 'preview') {
+          this.renderHtmlPreview(this.initialCode);
+        } else {
+          this.previewEl.innerHTML = '';
+        }
       }
       if (this.container.getAttribute('data-live') === 'true') {
         this.run();
@@ -348,6 +379,45 @@
 
   // Expose global API
   window.docmd = window.docmd || {};
+  const injectedVars = (typeof window !== 'undefined' && window.__DOCMD_VARIABLES__ && typeof window.__DOCMD_VARIABLES__ === 'object') ? window.__DOCMD_VARIABLES__ : {};
+  if (!window.docmd.version) {
+    window.docmd.version = injectedVars.docmd?.version || injectedVars.DOCMD_VERSION || '0.9.9';
+  }
+  if (!window.docmd.var) {
+    window.docmd.var = {
+      _store: {
+        docmd: { version: window.docmd.version, buildYear: String(new Date().getFullYear()) },
+        version: window.docmd.version,
+        DOCMD_VERSION: window.docmd.version,
+        ...injectedVars
+      },
+      get: function(k) {
+        if (!k || typeof k !== 'string') return undefined;
+        if (k in this._store && this._store[k] !== undefined) return this._store[k];
+        const parts = k.split('.');
+        if (parts.length > 1) {
+          let cur = this._store;
+          let found = true;
+          for (const p of parts) {
+            if (cur !== null && cur !== undefined && typeof cur === 'object' && p in cur) cur = cur[p];
+            else { found = false; break; }
+          }
+          if (found && cur !== undefined) return cur;
+        }
+        if (k === 'docmd.version' || k === 'DOCMD_VERSION' || k === 'version') return window.docmd.version;
+        if (k === 'docmd.buildYear' || k === 'BUILD_YEAR') return String(new Date().getFullYear());
+        return undefined;
+      },
+      set: function(k, v) {
+        if (typeof k === 'string') this._store[k] = v;
+        else if (typeof k === 'object' && k !== null) Object.assign(this._store, k);
+      },
+      all: function() { return { ...this._store }; }
+    };
+  }
+  if (!window.docmd.get) {
+    window.docmd.get = (k) => window.docmd.var?.get?.(k);
+  }
   window.docmd.playground = {
     init: initPlaygrounds
   };

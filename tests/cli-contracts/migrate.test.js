@@ -19,7 +19,7 @@ import {
   writeFile,
   runTestFile
 } from '../shared.js';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -55,7 +55,7 @@ export const test = runTestFile({
       let output = '';
       let code = -1;
       try {
-        output = execSync(`node ${DOCMD} migrate --mkdocs --dry-run`, { cwd: dir, stdio: 'pipe', encoding: 'utf8' });
+        output = execFileSync(process.execPath, [DOCMD, 'migrate', '--mkdocs', '--dry-run'], { cwd: dir, stdio: 'pipe', encoding: 'utf8' });
         code = 0;
       } catch (e) {
         output = (typeof e.stdout === 'string' ? e.stdout : '') +
@@ -96,7 +96,7 @@ export const test = runTestFile({
       let output = '';
       let code = -1;
       try {
-        output = execSync(`node ${DOCMD} migrate --upgrade --dry-run`, { cwd: dir, stdio: 'pipe', encoding: 'utf8' });
+        output = execFileSync(process.execPath, [DOCMD, 'migrate', '--upgrade', '--dry-run'], { cwd: dir, stdio: 'pipe', encoding: 'utf8' });
         code = 0;
       } catch (e) {
         output = (typeof e.stdout === 'string' ? e.stdout : '') +
@@ -129,7 +129,7 @@ export const test = runTestFile({
         theme: { defaultMode: 'dark', enableModeToggle: false, positionMode: 'bottom' }
       }, null, 2) + '\n');
 
-      execSync(`node ${DOCMD} migrate --upgrade`, { cwd: dir, stdio: 'pipe' });
+      execFileSync(process.execPath, [DOCMD, 'migrate', '--upgrade'], { cwd: dir, stdio: 'pipe' });
 
       const after = JSON.parse(fs.readFileSync(path.join(dir, 'docmd.config.json'), 'utf8'));
       assert(after.title === 'Legacy', 'N-4: siteTitle → title');
@@ -164,7 +164,7 @@ export const test = runTestFile({
       writeFile(dir, 'docs/index.md', '# Home\n');
       writeFile(dir, 'docmd.config.json', '{"title":"N-10","src":"./docs","out":"./site"}\n');
 
-      execSync(`node ${DOCMD} migrate --mkdocs`, { cwd: dir, stdio: 'pipe' });
+      execFileSync(process.execPath, [DOCMD, 'migrate', '--mkdocs'], { cwd: dir, stdio: 'pipe' });
 
       // Package manifests stay in cwd (not in backup)
       assert(fs.existsSync(path.join(dir, 'package.json')), 'N-10: package.json stays in cwd after migrate');
@@ -174,6 +174,36 @@ export const test = runTestFile({
       assert(fs.existsSync(path.join(dir, 'node_modules')) === false || !fs.statSync(path.join(dir, 'node_modules')).isDirectory(), 'N-10: node_modules is not in the backup');
       // Backup contains user content
       assert(fs.existsSync(path.join(dir, 'mkdocs-backup/docs/index.md')), 'N-10: backup contains moved content (mkdocs-backup/docs/index.md)');
+    }
+
+    // MkDocs nav: stops at the next top-level key, maps index.md to its
+    // folder, and drops YAML quotes.
+    {
+      const dir = setup('migrate-mkdocs-nav');
+      writeFile(dir, 'mkdocs.yml', [
+        'site_name: Nav',
+        'nav:',
+        '  - Home: index.md',
+        '  - Guide:',
+        '    - Overview: guide/index.md',
+        "  - 'Change Log': 'changelog.md'",
+        'plugins:',
+        '  - search',
+        'markdown_extensions:',
+        '  - admonition',
+      ].join('\n'));
+      writeFile(dir, 'docs/index.md', '# Home\n');
+      writeFile(dir, 'docs/guide/index.md', '# Guide\n');
+      writeFile(dir, 'docs/changelog.md', '# Changes\n');
+
+      execFileSync(process.execPath, [DOCMD, 'migrate', '--mkdocs'], { cwd: dir, stdio: 'pipe' });
+      const written = fs.readFileSync(path.join(dir, 'docmd.config.js'), 'utf8');
+      const navigation = JSON.parse(written.match(/navigation: (\[[\s\S]*?\n {2}\])/)[1].replace(/(\w+):/g, '"$1":'));
+      assert(JSON.stringify(navigation) === JSON.stringify([
+        { title: 'Home', path: '/' },
+        { title: 'Guide', children: [{ title: 'Overview', path: '/guide/' }] },
+        { title: 'Change Log', path: '/changelog/' },
+      ]), 'MkDocs nav: plugins and extensions are not nav items, index.md maps to its folder, quotes are dropped');
     }
 
     // N-22 (Docusaurus) — preserve original staticDir.
@@ -188,7 +218,7 @@ export const test = runTestFile({
       writeFile(dir, 'docs/index.md', '# Home\n');
       writeFile(dir, 'docmd.config.json', '{"title":"N-22-d","src":"./docs","out":"./site"}\n');
 
-      execSync(`node ${DOCMD} migrate --docusaurus`, { cwd: dir, stdio: 'pipe' });
+      execFileSync(process.execPath, [DOCMD, 'migrate', '--docusaurus'], { cwd: dir, stdio: 'pipe' });
       const written = fs.readFileSync(path.join(dir, 'docmd.config.js'), 'utf8');
       assert(/out:\s*'my-static'/.test(written) || /out:\s*"my-static"/.test(written) || /out: 'my-static'/.test(written), 'N-22: Docusaurus staticDir "my-static" is preserved in the generated config');
     }
@@ -204,7 +234,7 @@ export const test = runTestFile({
       writeFile(dir, 'docs/index.md', '# Home\n');
       writeFile(dir, 'docmd.config.json', '{"title":"N-22-m","src":"./docs","out":"./site"}\n');
 
-      execSync(`node ${DOCMD} migrate --mkdocs`, { cwd: dir, stdio: 'pipe' });
+      execFileSync(process.execPath, [DOCMD, 'migrate', '--mkdocs'], { cwd: dir, stdio: 'pipe' });
       const written = fs.readFileSync(path.join(dir, 'docmd.config.js'), 'utf8');
       assert(/out:\s*['"]my-site['"]/.test(written), 'N-22: MkDocs site_dir "my-site" is preserved in the generated config');
     }
@@ -224,10 +254,10 @@ export const test = runTestFile({
       writeFile(dir, 'docs/index.md', '# Home\n');
       writeFile(dir, 'docmd.config.json', '{"title":"N-9","src":"./docs","out":"./site"}\n');
 
-      execSync(`node ${DOCMD} migrate --mkdocs`, { cwd: dir, stdio: 'pipe' });
+      execFileSync(process.execPath, [DOCMD, 'migrate', '--mkdocs'], { cwd: dir, stdio: 'pipe' });
       const written = fs.readFileSync(path.join(dir, 'docmd.config.js'), 'utf8');
       assert(/navigation:\s*\[/.test(written), 'N-9: generated config has a navigation array');
-      assert(/'Home'|"Home"/.test(written) && /\bindex\b/.test(written), 'N-9: navigation contains the Home entry');
+      assert(/'Home'|"Home"/.test(written) && /path:\s*['"]\/['"]/.test(written), 'N-9: navigation contains the Home entry');
       assert(/'Guide'|"Guide"/.test(written) && /children/.test(written), 'N-9: multi-level nav (Guide with children) is preserved');
     }
   }

@@ -247,6 +247,11 @@ addInProcess(
   await import('./cli-contracts/test-root.test.js')
 );
 addInProcess(
+  'dev-quiet-window',
+  'Dev watcher quiet window defers, not drops, a save after a rebuild',
+  await import('./cli-contracts/dev-quiet-window.test.js')
+);
+addInProcess(
   'action-host',
   'Action host: caller, origin allowlist, rebuild, onServerReady, close',
   await import('./cli-contracts/action-host.test.js')
@@ -292,12 +297,28 @@ addExternal(
   ['./packages/plugins/okf/node_modules/tsx/dist/cli.mjs', '--test', 'packages/plugins/okf/tests/*.test.ts']
 );
 
+// --- Threads plugin ---------------------------------------------------------
+addExternal(
+  'threads-plugin',
+  'Threads plugin (inline discussion threads)',
+  'node',
+  ['./packages/plugins/threads/node_modules/tsx/dist/cli.mjs', '--test', 'packages/plugins/threads/tests/*.test.ts']
+);
+
 // --- Section 7: Mermaid plugin --------------------------------------------
 addExternal(
   'mermaid-plugin',
   'Mermaid plugin (diagram rendering and offline bundling)',
   'node',
   ['./packages/plugins/mermaid/node_modules/tsx/dist/cli.mjs', '--test', 'packages/plugins/mermaid/tests/*.test.ts']
+);
+
+// --- Browser bridge --------------------------------------------------------
+addExternal(
+  'ui-bridge',
+  'Browser bridge (docmd-api.js reconnect and reload-once)',
+  'node',
+  ['--test', 'tests/ui/*.test.js']
 );
 
 // --- Section 8: LLMS plugin -----------------------------------------------

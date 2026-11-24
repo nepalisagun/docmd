@@ -114,10 +114,11 @@ export const test = runTestFile({
       const dir = setup('f-tui-banner-control');
       writeFile(dir, 'docs/index.md', '# Home\n');
 
-      // Default — banner present.
+      // Default — banner present. Clear NO_COLOR and DOCMD_NO_BANNER so
+      // the caller's environment cannot suppress the banner here.
       let output = '';
       try {
-        output = execSync(`node ${DOCMD} build`, { cwd: dir, stdio: 'pipe', encoding: 'utf8' });
+        output = execFileSync(process.execPath, [DOCMD, 'build'], { cwd: dir, stdio: 'pipe', encoding: 'utf8', env: { ...process.env, NO_COLOR: '', DOCMD_NO_BANNER: '' } });
       } catch (e) {
         output = (typeof e.stdout === 'string' ? e.stdout : '') + (typeof e.stderr === 'string' ? e.stderr : '');
       }
@@ -127,7 +128,7 @@ export const test = runTestFile({
       // our banner-specific check suppresses the ASCII art too).
       output = '';
       try {
-        output = execSync(`node ${DOCMD} build`, { cwd: dir, stdio: 'pipe', encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
+        output = execFileSync(process.execPath, [DOCMD, 'build'], { cwd: dir, stdio: 'pipe', encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } });
       } catch (e) {
         output = (typeof e.stdout === 'string' ? e.stdout : '') + (typeof e.stderr === 'string' ? e.stderr : '');
       }
@@ -136,7 +137,7 @@ export const test = runTestFile({
       // DOCMD_NO_BANNER — banner suppressed even without NO_COLOR.
       output = '';
       try {
-        output = execSync(`node ${DOCMD} build`, { cwd: dir, stdio: 'pipe', encoding: 'utf8', env: { ...process.env, DOCMD_NO_BANNER: '1', NO_COLOR: '' } });
+        output = execFileSync(process.execPath, [DOCMD, 'build'], { cwd: dir, stdio: 'pipe', encoding: 'utf8', env: { ...process.env, DOCMD_NO_BANNER: '1', NO_COLOR: '' } });
       } catch (e) {
         output = (typeof e.stdout === 'string' ? e.stdout : '') + (typeof e.stderr === 'string' ? e.stderr : '');
       }

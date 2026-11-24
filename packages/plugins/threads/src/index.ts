@@ -4,12 +4,13 @@ import { fileURLToPath } from 'url';
 import { setup as setupContainers } from './plugin/containers.js';
 import { setup as setupHighlightRule } from './plugin/highlight-rule.js';
 import { actions } from './plugin/actions.js';
+import { normalizeOptions, type ThreadsOptions } from './plugin/config.js';
 import { scriptLiteral } from '@docmd/utils';
 import type { PluginDescriptor } from '@docmd/api';
 
 export const plugin: PluginDescriptor = {
   name: 'threads',
-  version: '0.10.1',
+  version: '0.10.2',
   capabilities: ['markdown', 'body', 'assets', 'actions', 'translations'],
   requiresLiveServer: true
 };
@@ -42,6 +43,38 @@ export function markdownSetup(md: any, _options?: any): void {
   setupHighlightRule(md);
 }
 
+/**
+ * generateScripts runs for every page and slot, so options are normalised once
+ * per options value. An invalid value throws its `threads/config` error on the
+ * first call only (one log line); later calls with the same value fall back to
+ * the defaults so the rest of the pages keep a working client.
+ */
+const optionsCache = new WeakMap<object, ThreadsOptions>();
+let primitiveKey: unknown;
+let primitiveValue: ThreadsOptions | undefined;
+
+function remember(options: unknown, value: ThreadsOptions): void {
+  if (typeof options === 'object' && options !== null) optionsCache.set(options, value);
+  else { primitiveKey = options; primitiveValue = value; }
+}
+
+function resolveOptions(options: unknown): ThreadsOptions {
+  if (typeof options === 'object' && options !== null) {
+    const hit = optionsCache.get(options);
+    if (hit) return hit;
+  } else if (primitiveValue && primitiveKey === options) {
+    return primitiveValue;
+  }
+  try {
+    const result = normalizeOptions(options);
+    remember(options, result);
+    return result;
+  } catch (err) {
+    remember(options, normalizeOptions(undefined));
+    throw err;
+  }
+}
+
 export function generateScripts(config: any, options?: any): { headScriptsHtml: string; bodyScriptsHtml: string } {
   // S-7: parse authors.json, never inline the raw file text. scriptLiteral
   // escapes </script, <!--, U+2028, U+2029 so the JSON is safe inside <script>.
@@ -59,7 +92,8 @@ export function generateScripts(config: any, options?: any): { headScriptsHtml: 
     authors = {};
   }
 
-  const clientConfig = { sidebar: options?.sidebar === true };
+  const { sidebar, autoPublish } = resolveOptions(options);
+  const clientConfig = { sidebar, autoPublish };
   const i18nStrings = loadPluginStrings(config._activeLocale?.id || 'en');
 
   return {

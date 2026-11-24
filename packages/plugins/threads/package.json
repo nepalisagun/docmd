@@ -1,6 +1,6 @@
 {
   "name": "@docmd/plugin-threads",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "type": "module",
   "description": "Inline discussion threads and Markdown review comments plugin for docmd.",
   "main": "dist/index.js",
@@ -35,7 +35,8 @@
   "scripts": {
     "build": "tsc && node build.js",
     "build:client": "node build.js",
-    "test": "echo 'TODO: migrate tests to vitest'"
+    "test": "tsx --test tests/*.test.ts",
+    "test:e2e": "playwright test"
   },
   "peerDependencies": {
     "@docmd/api": "workspace:*",
@@ -48,9 +49,10 @@
   },
   "devDependencies": {
     "@docmd/api": "workspace:*",
-    "@playwright/test": "^1.65.0",
+    "@playwright/test": "^1.65.1",
     "@types/node": "^26.6.6",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15"
   },
   "keywords": [
     "docmd",

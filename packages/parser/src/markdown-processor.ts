@@ -109,10 +109,24 @@ const emoji = (emojiPkg as any).full || emojiPkg;
 // The Feature Registry
 import { registerFeatures } from './features/index.js';
 
+// Iteratively strip HTML tags to prevent incomplete multi-character sanitization bypasses
+function stripHtmlTags(input: string): string {
+  if (!input || !input.includes('<')) return input || '';
+  let previous = '';
+  let result = input;
+  while (result !== previous) {
+    previous = result;
+    result = result.replace(/<[^>]+>/g, '');
+  }
+  return result;
+}
+
 // Custom Heading ID & Anchor Logic
 const headingIdPlugin = (md, options: any = {}) => {
   const uiStrings = options.uiStrings || {};
   md.core.ruler.push('heading_anchors', function (state) {
+    const fmHeadingIds = state.env?.headingIds || state.env?.frontmatter?.headingIds || state.env?.frontmatter?.['heading-ids'] || state.env?.frontmatter?.heading_ids;
+    const headingStyle = fmHeadingIds || options.headingIds || 'nested';
     let containerDepth = 0;
     const lastHeadingIds = new Array(7).fill(null);
     const usedIds = new Map();
@@ -137,40 +151,63 @@ const headingIdPlugin = (md, options: any = {}) => {
         // 1. Generate ID if not present and NOT in a container
         let id = token.attrGet('id');
         if (!id && inlineToken && inlineToken.content && !inContainer) {
-          const slug = inlineToken.content
-            .toLowerCase()
-            .trim()
-            .replace(/\s+/g, '-')
-            .replace(/[^\p{L}\p{N}-]+/gu, '')
-            .replace(/--+/g, '-')
-            .replace(/^-+/, '')
-            .replace(/-+$/, '');
+          if (headingStyle === 'github') {
+            const slug = stripHtmlTags(inlineToken.content)
+              .toLowerCase()
+              .trim()
+              .replace(/[^\p{L}\p{M}\p{N}\p{Pc}\p{Pd}\s]/gu, '')
+              .replace(/\s/g, '-')
+              .replace(/^-+/, '')
+              .replace(/-+$/, '');
 
-          if (slug) {
-            // Find parent ID from previous levels
-            let parentId = null;
-            for (let j = level - 1; j >= 1; j--) {
-              if (lastHeadingIds[j]) {
-                parentId = lastHeadingIds[j];
-                break;
+            if (slug) {
+              id = slug;
+              if (usedIds.has(id)) {
+                const count = usedIds.get(id);
+                usedIds.set(id, count + 1);
+                id = `${id}-${count}`;
+              } else {
+                usedIds.set(id, 1);
               }
+
+              token.attrSet('id', id);
             }
+          } else {
+            const slug = inlineToken.content
+              .toLowerCase()
+              .trim()
+              .replace(/\s+/g, '-')
+              .replace(/[^\p{L}\p{N}-]+/gu, '')
+              .replace(/--+/g, '-')
+              .replace(/^-+/, '')
+              .replace(/-+$/, '');
 
-            id = parentId ? `${parentId}-${slug}` : slug;
+            if (slug) {
+              // Find parent ID from previous levels
+              let parentId = null;
+              for (let j = level - 1; j >= 1; j--) {
+                if (lastHeadingIds[j]) {
+                  parentId = lastHeadingIds[j];
+                  break;
+                }
+              }
 
-            // Handle hard collisions (same heading sequence twice)
-            if (usedIds.has(id)) {
-              const count = usedIds.get(id);
-              usedIds.set(id, count + 1);
-              id = `${id}-${count}`;
-            } else {
-              usedIds.set(id, 1);
+              id = parentId ? `${parentId}-${slug}` : slug;
+
+              // Handle hard collisions (same heading sequence twice)
+              if (usedIds.has(id)) {
+                const count = usedIds.get(id);
+                usedIds.set(id, count + 1);
+                id = `${id}-${count}`;
+              } else {
+                usedIds.set(id, 1);
+              }
+
+              token.attrSet('id', id);
+              lastHeadingIds[level] = id;
+              // Clear deeper levels to prevent wrong parent nesting on backtrack
+              for (let j = level + 1; j <= 6; j++) lastHeadingIds[j] = null;
             }
-
-            token.attrSet('id', id);
-            lastHeadingIds[level] = id;
-            // Clear deeper levels to prevent wrong parent nesting on backtrack
-            for (let j = level + 1; j <= 6; j++) lastHeadingIds[j] = null;
           }
         }
 
@@ -409,7 +446,10 @@ function customHtmlBlock(state: any, startLine: number, endLine: number, silent:
   md.use(abbr);
   md.use(deflist);
   md.use(emoji);
-  md.use(headingIdPlugin, { uiStrings: config._uiStrings || {} });
+  md.use(headingIdPlugin, {
+    uiStrings: config._uiStrings || {},
+    headingIds: config.markdown?.headingIds
+  });
 
   // Register Built-in Features
   registerFeatures(md);
@@ -460,19 +500,25 @@ function customHtmlBlock(state: any, startLine: number, endLine: number, silent:
         return self.renderToken(tokens, idx, options);
       }
 
-      const isHashOnly = href.startsWith('#');
+      const isHashOrQueryOnly = href.startsWith('#') || href.startsWith('?');
       const isAsset = href.match(/(^|\/)assets\//);
 
-      if (!isHashOnly && !isAsset) {
+      if (!isHashOrQueryOnly && !isAsset) {
         const result = resolveHref(href);
 
         if (!result.isRaw) {
           let pathPart = result.href;
           let hashPart = '';
+          let queryPart = '';
           const hi = pathPart.indexOf('#');
           if (hi >= 0) {
             hashPart = pathPart.substring(hi);
             pathPart = pathPart.substring(0, hi);
+          }
+          const qi = pathPart.indexOf('?');
+          if (qi >= 0) {
+            queryPart = pathPart.substring(qi);
+            pathPart = pathPart.substring(0, qi);
           }
 
           // Depth adjustment for clean URLs (non-index pages are shifted into subfolders).
@@ -488,7 +534,7 @@ function customHtmlBlock(state: any, startLine: number, endLine: number, silent:
             }
           }
 
-          token.attrs[hrefIndex][1] = pathPart + hashPart;
+          token.attrs[hrefIndex][1] = pathPart + queryPart + hashPart;
         } else {
           token.attrs[hrefIndex][1] = result.href;
         }
@@ -512,7 +558,7 @@ function customHtmlBlock(state: any, startLine: number, endLine: number, silent:
 
 function stripHtml(html: any) {
   if (!html) return '';
-  return html.replace(/<[^>]*>?/gm, '');
+  return stripHtmlTags(html);
 }
 
 function decodeHtmlEntities(str: string): string {
@@ -591,6 +637,11 @@ function processContent(rawString: any, mdInstance: any, config: any, env: any =
   // depth-tracking block rule in features/common-containers.ts always sees
   // a matching close.
   markdownContent = applyContainerNormaliser(markdownContent, env);
+
+  env = env || {};
+  env.frontmatter = frontmatter;
+  const fmHeadingIds = frontmatter.headingIds || frontmatter['heading-ids'] || frontmatter.heading_ids;
+  if (fmHeadingIds) env.headingIds = fmHeadingIds;
 
   const htmlContent = mdInstance.render(markdownContent, env);
   const headings = extractHeadings(htmlContent);
@@ -679,6 +730,11 @@ async function processContentAsync(rawString: string, mdInstance: any, config: a
     const h1Match = markdownContent.match(/^#\s+(.*)/m);
     if (h1Match) frontmatter.title = h1Match[1].trim();
   }
+
+  env = env || {};
+  env.frontmatter = frontmatter;
+  const fmHeadingIds = frontmatter.headingIds || frontmatter['heading-ids'] || frontmatter.heading_ids;
+  if (fmHeadingIds) env.headingIds = fmHeadingIds;
 
   let htmlContent = mdInstance.render(markdownContent, env);
   if (env) {

@@ -20,9 +20,13 @@ const table: Array<[string, DraftOp[], (t: Thread[]) => void]> = [
   ['add-thread', [{ ...base, kind: 'add-thread', threadId: 't-new', commentId: 'c-new', body: 'hello' }], (t) => {
     assert.equal(t.length, 2);
     assert.deepEqual(t[1], {
-      id: 't-new', resolved: false, resolved_by: null, resolved_at: null,
+      id: 't-new', resolved: false, resolved_by: null, resolved_at: null, draft: true,
       comments: [{ id: 'c-new', thread_id: 't-new', parent_id: null, author: 'Me', date: '2026-04-01', edited_at: null, body: 'hello', reactions: [], draft: true }],
     });
+  }],
+  ['add-thread with an anchor keeps its quote only', [{ ...base, kind: 'add-thread', threadId: 't-new', commentId: 'c-new', body: 'hello', anchor: { quote: 'some text', prefix: 'p', suffix: null, selector: null, offset: 3, blockText: null } }], (t) => {
+    assert.deepEqual(t[1]!.anchor, { quote: 'some text' });
+    assert.equal(t[1]!.draft, true);
   }],
   ['add-comment', [{ ...base, kind: 'add-comment', threadId: 't-pub', commentId: 'c-3', parentId: 'c-1', body: 'reply' }], (t) => {
     assert.equal(t[0].comments.length, 3);

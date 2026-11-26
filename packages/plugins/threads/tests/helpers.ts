@@ -51,8 +51,8 @@ export interface TestCtx {
   readFileLines(relativePath: string): Promise<string[]>;
   /** Which command hosts the call; the dispatcher's default is dev. */
   mode?: 'dev' | 'serve';
-  /** Only `identity` is read by the plugin. */
-  caller?: { identity: string | null };
+  /** Only `identity` and `headers` are read by the plugin. */
+  caller?: { identity: string | null; headers?: Record<string, string> };
 }
 
 /** Action context matching what the action dispatcher provides. */
@@ -88,4 +88,27 @@ export function failingReset(real: DraftStore): DraftStore {
       return Promise.reject(new Error('journal write failed'));
     },
   };
+}
+
+/** A ctx whose writeFile fails from the n-th call on (or only on it); the other writes land under `root`. */
+export function failingWrites(root: string, from: number, only = false): Partial<TestCtx> {
+  let n = 0;
+  return {
+    async writeFile(rel: string, content: string) {
+      n++;
+      if (only ? n === from : n >= from) throw new Error('disk full');
+      fs.writeFileSync(safePath(root, rel), content);
+    },
+  };
+}
+
+/** Every file under the docs root with its bytes, to prove a refused call changed nothing. */
+export function snapshotTree(dir: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const entry of fs.readdirSync(safePath(dir, '.'), { withFileTypes: true, recursive: true })) {
+    if (!entry.isFile()) continue;
+    const file = path.join(entry.parentPath, entry.name);
+    out[path.relative(dir, file)] = fs.readFileSync(safePath(path.dirname(file), entry.name), 'utf8');
+  }
+  return out;
 }

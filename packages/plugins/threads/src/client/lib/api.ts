@@ -1,5 +1,5 @@
 import { getIdentityPayload, getStoredIdentity } from './identity';
-import type { Thread, Comment, Reaction, AuthorsMap, DraftMode, Journal, PublishResult, WhoAmI } from '../../types';
+import type { Thread, Comment, Reaction, AuthorsMap, DraftMode, Journal, PublishResult, ReviewSummary, WhoAmI } from '../../types';
 
 declare global {
   var docmd: {
@@ -19,6 +19,15 @@ function getSourceFile(): string {
   return file;
 }
 
+/**
+ * The page, for calls that do not act on it: the server keeps its data in the docs root of the
+ * page's project (under a workspace, the subproject's). Omitted when the page has no source file.
+ */
+function pageFile(): { file: string } | Record<string, never> {
+  const file = document.body.dataset['sourceFile'];
+  return file ? { file } : {};
+}
+
 /** Identity for reads: whatever is stored. Page loads never prompt. */
 function storedIdentity(): { author: string; authorKey: string; avatarUrl: string } | Record<string, never> {
   return getStoredIdentity() ?? {};
@@ -26,15 +35,19 @@ function storedIdentity(): { author: string; authorKey: string; avatarUrl: strin
 
 export async function fetchAuthors(): Promise<AuthorsMap> {
   try {
-    return await docmd.call('threads:get-authors', {});
+    return await docmd.call('threads:get-authors', pageFile());
   } catch {
     // Fallback to injected global (static builds)
     return (window as any).__threads_authors || {};
   }
 }
 
-export async function upsertAuthor(authorKey: string, name: string, avatarUrl: string): Promise<void> {
-  await docmd.call('threads:upsert-author', { authorKey, name, avatarUrl });
+export async function upsertAuthor(authorKey: string | null, name: string, avatarUrl: string): Promise<void> {
+  // A header identity names itself; the server rejects a client-sent key.
+  const payload = authorKey === null
+    ? { ...pageFile(), name, avatarUrl }
+    : { ...pageFile(), authorKey, name, avatarUrl };
+  await docmd.call('threads:upsert-author', payload);
 }
 
 export async function fetchThreads(): Promise<Thread[]> {
@@ -155,13 +168,28 @@ async function call<T>(action: string, payload: Record<string, unknown>): Promis
 
 /** The caller's journal. Read on every page load, so it never prompts for a name. */
 export function whoami(): Promise<WhoAmI> {
-  return call('threads:whoami', storedIdentity());
+  return call('threads:whoami', { ...pageFile(), ...storedIdentity() });
 }
 
 export function setMode(mode: DraftMode): Promise<Journal> {
-  return call('threads:set-mode', { ...getIdentityPayload(), mode });
+  return call('threads:set-mode', { ...pageFile(), ...getIdentityPayload(), mode });
 }
 
 export function publishReview(): Promise<PublishResult> {
-  return call('threads:publish-review', { ...getIdentityPayload() });
+  return call('threads:publish-review', { ...pageFile(), ...getIdentityPayload() });
+}
+
+/** Take a review back: reverse a published one, or empty the caller's open one. */
+export async function discardReview(reviewId: string): Promise<void> {
+  await call('threads:discard-review', { ...getIdentityPayload(), reviewId });
+}
+
+/** Every review, newest first (the server orders them). */
+export function listReviews(): Promise<ReviewSummary[]> {
+  return call('threads:list-reviews', {});
+}
+
+/** Set the open review's title and/or summary (`null` clears; an absent key is kept); returns the caller's journal. */
+export function updateReview(patch: { title?: string | null; summary?: string | null }): Promise<Journal> {
+  return call('threads:update-review', { ...getIdentityPayload(), ...patch });
 }

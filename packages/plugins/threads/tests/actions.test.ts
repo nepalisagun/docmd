@@ -11,17 +11,17 @@
  *    markup", "add-thread anchor does not match text inside the
  *    threads block", "delete-thread removes the highlight markup"   → moved to publish: tests/reviews.test.ts, "applyOps places marks…" and "applyOps removes…"
  *  - input validation, threads/<code> prefixes                      → kept
- *  - plugin surface                                                 → kept, plus the thirteen action names
+ *  - plugin surface                                                 → kept, plus the sixteen action names
  */
-import { test, mock, before, after, beforeEach } from 'node:test';
+import { test, mock, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { safePath } from '@docmd/utils';
-import { tempProject, makeCtx, MarkdownIt, failingReset, type TempProject, type TestCtx } from './helpers.ts';
+import { tempProject, makeCtx, MarkdownIt, failingReset, snapshotTree, type TempProject, type TestCtx } from './helpers.ts';
 import { actions } from '../src/plugin/actions.ts';
 import { createDraftStore, slug } from '../src/plugin/drafts.ts';
-import { createLock } from '../src/plugin/lock.ts';
+import { createLock, createNoGitSync } from '../src/plugin/lock.ts';
 import { publish } from '../src/plugin/reviews.ts';
 import * as plugin from '../src/index.ts';
 import { ThreadsError } from '../src/plugin/errors.ts';
@@ -37,6 +37,9 @@ before(() => {
 after(() => {
   mock.timers.reset();
   project.cleanup();
+});
+afterEach(() => {
+  mock.timers.tick(60_000); // the clock is frozen: a fresh rate-limit window per test, as this file's same-author adds share one
 });
 beforeEach(() => {
   project.reset();
@@ -127,6 +130,32 @@ test('get-threads on a file without threads returns [] and does not write', asyn
   assert.deepEqual(result, []);
   assert.equal(ctx.source._modified, false);
   assert.equal(fs.existsSync(path.join(docsRoot, '.threads', 'drafts')), false);
+});
+
+test('get-threads returns threads from every top-level threads block', async () => {
+  fs.writeFileSync(safePath(project.root, project.file), `# Split page
+
+::: threads
+  ::: thread t-first
+    ::: comment c-first "Alice" "2026-01-01"
+      First
+    :::
+  :::
+:::
+
+Discussion for the next section.
+
+::: threads
+  ::: thread t-second
+    ::: comment c-second "Bob" "2026-01-02"
+      Second
+    :::
+  :::
+:::
+`);
+  assert.deepEqual((await getThreads({})).map((t) => t.id), ['t-first', 't-second']);
+  const reply = await addComment('t-second');
+  assert.equal((await getThreads(ALICE)).find((t) => t.id === 't-second')?.comments[1].id, reply.id);
 });
 
 /** A published target and a drafted one for each of the five handlers. */
@@ -267,18 +296,59 @@ const MUTATIONS: Array<[string, Record<string, unknown>]> = [
   ['threads:toggle-reaction', { threadId: 't-thread1', commentId: 'c1-1', emoji: '👍' }],
 ];
 
-test('serve without a trusted identity refuses every mutation; dev succeeds; get-threads works in both', async () => {
-  for (const [name, payload] of MUTATIONS) {
-    await assert.rejects(
-      call(name, as(ALICE, payload), { mode: 'serve', caller: { identity: null } }),
-      (e: unknown) => e instanceof ThreadsError && e.code === 'no-identity' && /no trusted identity/.test(e.message),
-      name,
-    );
-    assert.equal(fs.existsSync(path.join(docsRoot, '.threads')), false, `${name} wrote nothing`);
+test('serve without a trusted identity refuses every write, with or without author; dev succeeds; reads work in both', async () => {
+  const REFUSED: Array<[string, Record<string, unknown>]> = [
+    ...MUTATIONS,
+    ['threads:set-mode', { mode: 'collect' }],
+    ['threads:update-review', { title: 'x', summary: 'y' }],
+    ['threads:publish-review', {}],
+    ['threads:discard-review', { reviewId: 'r-none' }],
+    ['threads:upsert-author', { authorKey: 'zed', name: 'Zed' }],
+  ];
+  const tree = snapshotTree(docsRoot);
+  const EMAIL = 'alice@example.com';
+  const warn = console.warn; // the refusals log the once-per-process warning; keep it out of the test output
+  console.warn = () => {};
+  // No identity, then an e-mail-shaped one: each is refused first, before the payload is read, and nothing is written.
+  for (const [identity, code] of [[null, 'no-identity'], [EMAIL, 'email-identity']] as const) {
+    for (const [name, payload] of REFUSED) {
+      const bare = name === 'threads:set-mode' || name === 'threads:update-review' || name === 'threads:discard-review' ? {} : payload; // no mode, no reviewId: the identity is still checked first
+      for (const sent of [as(ALICE, payload), { file: project.file, ...bare }]) {
+        await assert.rejects(
+          call(name, sent, { mode: 'serve', caller: { identity } }),
+          (e: unknown) => e instanceof ThreadsError && e.code === code && e.message.startsWith(`threads/${code}: `)
+            && (identity === null ? /^threads\/no-identity: no trusted identity/.test(e.message) : !e.message.includes(EMAIL) && e.message.includes('X-Auth-Request-User')),
+          `${code} ${name}`,
+        );
+        assert.deepEqual(snapshotTree(docsRoot), tree, `${code} ${name} changed nothing`);
+      }
+    }
   }
+  console.warn = warn;
+  // Reads treat an e-mail-shaped identity as unidentified and never carry the address.
+  const mail = { mode: 'serve', caller: { identity: EMAIL } } as const;
+  assert.deepEqual((await call<WhoAmI>('threads:whoami', {}, mail)).result, { identity: null, journal: null, orphanedMine: 0 });
+  for (const name of ['threads:get-authors', 'threads:list-reviews']) {
+    assert.ok(!JSON.stringify((await call(name, {}, mail)).result).includes(EMAIL), name);
+  }
+  const mailThreads = await getThreads({}, mail);
+  assert.deepEqual(mailThreads.map((t) => t.id), ['t-thread1', 't-thread2', 't-thread3']);
+  assert.ok(!JSON.stringify(mailThreads).includes(EMAIL));
+  assert.deepEqual(snapshotTree(docsRoot), tree, 'e-mail reads changed nothing');
+  const none = { mode: 'serve', caller: { identity: null } } as const;
+  assert.deepEqual((await call<Record<string, unknown>>('threads:get-authors', {}, none)).result, {});
+  assert.deepEqual((await call<WhoAmI>('threads:whoami', {}, none)).result, { identity: null, journal: null, orphanedMine: 0 });
   for (const [name, payload] of MUTATIONS) {
     await call(name, as(ALICE, payload), { mode: 'dev', caller: { identity: null } });
   }
+  await assert.rejects(
+    call('threads:discard-review', as(ALICE, {}), { mode: 'dev', caller: { identity: null } }),
+    (e: unknown) => e instanceof ThreadsError && e.code === 'invalid',
+  );
+  await assert.rejects(
+    call('threads:discard-review', as(ALICE, { reviewId: 1 }), { mode: 'dev', caller: { identity: null } }),
+    (e: unknown) => e instanceof ThreadsError && e.code === 'invalid',
+  );
   for (const mode of ['serve', 'dev'] as const) {
     const out = await getThreads(mode === 'dev' ? BOB : {}, { mode, caller: { identity: null } });
     assert.deepEqual(out.map((t) => t.id), ['t-thread1', 't-thread2', 't-thread3'], mode);
@@ -290,7 +360,7 @@ test('serve keys journals on the trusted identity, not the payload', async () =>
   const t = (await call<Thread>('threads:add-thread', as({ author: 'Mallory', authorKey: 'bob' }, { body: 'mine' }), serve('alice'))).result;
   assert.equal(fs.existsSync(journalPath('bob')), false);
   assert.equal(journalOps('alice').length, 1);
-  assert.equal(t.comments[0].author, 'Mallory', 'the payload still supplies the display name');
+  assert.equal(t.comments[0].author, 'alice', 'the display name is the identity, not the payload');
 
   const asBob = await getThreads({ author: 'Bob', authorKey: 'alice' }, serve('bob'));
   assert.ok(!asBob.some((x) => x.id === t.id), "bob does not see alice's drafts");
@@ -343,16 +413,17 @@ test('set-mode rejects any mode but auto and collect with threads/invalid and le
   }
 });
 
-test('whoami returns the caller\'s journal, or null without an identity, and nothing else', async () => {
+test('whoami returns the caller\'s journal, or null without an identity, and the orphan count, nothing else', async () => {
   await addThread();
   await addThread();
   await addThread(BOB);
   const mine = await whoami(ALICE);
-  assert.deepEqual(Object.keys(mine), ['journal']);
+  assert.deepEqual(Object.keys(mine), ['identity', 'journal', 'orphanedMine']);
+  assert.deepEqual(mine.identity, { key: 'alice', name: 'Alice', avatarUrl: '', source: 'payload', isAdmin: false });
   assert.equal(mine.journal?.ops.length, 2);
   assert.equal((await whoami(BOB)).journal?.ops.length, 1);
-  assert.deepEqual(await whoami({}), { journal: null });
-  assert.deepEqual(await whoami({ author: '  ' }), { journal: null });
+  assert.deepEqual(await whoami({}), { identity: null, journal: null, orphanedMine: 0 });
+  assert.deepEqual(await whoami({ author: '  ' }), { identity: null, journal: null, orphanedMine: 0 });
 });
 
 test('whoami in the window after a publish whose journal reset failed leaves out the ops it published', async () => {
@@ -362,7 +433,7 @@ test('whoami in the window after a publish whose journal reset failed leaves out
   const ctx = makeCtx(project.root, { config: { src: 'docs' } });
   await assert.rejects(
     publish({ key: 'alice', name: 'Alice' }, ctx as never, {
-      store: failingReset(real), lock: createLock(), now: Date.now, newId: (prefix) => prefix + 'aaaaaaaa',
+      store: failingReset(real), sync: createNoGitSync(createLock()), now: Date.now, newId: (prefix) => prefix + 'aaaaaaaa',
     }),
     /journal write failed/,
   );
@@ -381,7 +452,7 @@ test('serve: set-mode needs a trusted identity and keys on it; whoami follows; d
     (e: unknown) => e instanceof ThreadsError && e.code === 'no-identity',
   );
   assert.equal(fs.existsSync(path.join(docsRoot, '.threads', 'drafts')), false, 'nothing was written');
-  assert.deepEqual(await whoami(ALICE, serve(null)), { journal: null });
+  assert.deepEqual(await whoami(ALICE, serve(null)), { identity: null, journal: null, orphanedMine: 0 });
 
   const set = await setMode({ author: 'Mallory', authorKey: 'bob', mode: 'collect' }, serve('alice'));
   assert.equal(set.mode, 'collect');
@@ -389,6 +460,7 @@ test('serve: set-mode needs a trusted identity and keys on it; whoami follows; d
   assert.equal(fs.existsSync(journalPath('bob')), false, 'the payload key is ignored');
   const seen = (await whoami({ author: 'Mallory', authorKey: 'bob' }, serve('alice'))).journal;
   assert.deepEqual(seen, set);
+  assert.deepEqual((await whoami({}, serve('alice'))).identity, { key: 'alice', name: 'alice', avatarUrl: '', source: 'header', isAdmin: false });
 
   const dev = await setMode({ ...BOB, mode: 'collect' }, { mode: 'dev', caller: { identity: 'alice' } });
   assert.equal(dev.mode, 'collect');
@@ -442,6 +514,10 @@ test('lookup and validation failures carry the threads/<code> prefix', async () 
 test('plugin surface: descriptor, hooks and action names', () => {
   assert.equal(plugin.plugin.name, 'threads');
   assert.ok(plugin.plugin.capabilities?.includes('actions'));
+  assert.ok(plugin.plugin.capabilities?.includes('server'));
+  assert.equal(typeof plugin.onServerReady, 'function');
+  const pkg = JSON.parse(fs.readFileSync(safePath(path.resolve(path.dirname(new URL(import.meta.url).pathname), '..'), 'package.json'), 'utf8'));
+  assert.deepEqual(pkg.docmd.capabilities, plugin.plugin.capabilities);
   assert.equal(plugin.plugin.requiresLiveServer, true);
   assert.equal(typeof plugin.markdownSetup, 'function');
   assert.equal(typeof plugin.generateScripts, 'function');
@@ -449,14 +525,14 @@ test('plugin surface: descriptor, hooks and action names', () => {
   assert.equal(typeof plugin.actions, 'object');
   assert.deepEqual(Object.keys(plugin.actions).sort(), [
     'threads:add-comment', 'threads:add-thread', 'threads:delete-comment', 'threads:delete-thread',
-    'threads:edit-comment', 'threads:get-authors', 'threads:get-threads', 'threads:publish-review',
-    'threads:resolve-thread', 'threads:set-mode',
-    'threads:toggle-reaction', 'threads:upsert-author', 'threads:whoami',
+    'threads:discard-review', 'threads:edit-comment', 'threads:get-authors', 'threads:get-threads', 'threads:list-reviews',
+    'threads:publish-review', 'threads:resolve-thread', 'threads:set-mode',
+    'threads:toggle-reaction', 'threads:update-review', 'threads:upsert-author', 'threads:whoami',
   ]);
   const assets = plugin.getAssets();
   const scripts = plugin.generateScripts({ src: path.join(project.root, 'docs') }, { sidebar: true });
-  const DEFAULT_CONFIG = '"sidebar":false,"autoPublish":{"seconds":180,"startOn":true}';
-  assert.ok(scripts.bodyScriptsHtml.includes('window.__threads_config={"sidebar":true,"autoPublish":{"seconds":180,"startOn":true}};'));
+  const DEFAULT_CONFIG = '"sidebar":false,"autoPublish":{"seconds":180,"startOn":true},"permissions":{"resolve":"anyone"}';
+  assert.ok(scripts.bodyScriptsHtml.includes('window.__threads_config={"sidebar":true,"autoPublish":{"seconds":180,"startOn":true},"permissions":{"resolve":"anyone"}};'));
   for (const opts of [{}, undefined]) {
     const out = plugin.generateScripts({ src: path.join(project.root, 'docs') }, opts);
     assert.ok(out.bodyScriptsHtml.includes(`window.__threads_config={${DEFAULT_CONFIG}};`));
@@ -464,9 +540,9 @@ test('plugin surface: descriptor, hooks and action names', () => {
   // Only the options the client reads are injected; the rest of the plugin config stays on the server.
   const secret = plugin.generateScripts(
     { src: path.join(project.root, 'docs') },
-    { autoPublish: { seconds: 60, startOn: false }, identityHeader: 'X-A', permissions: { admins: ['a'] } },
+    { autoPublish: { seconds: 60, startOn: false }, identityHeader: 'X-A', permissions: { admins: ['a'], resolve: 'author' } },
   ).bodyScriptsHtml;
-  assert.ok(secret.includes('"autoPublish":{"seconds":60,"startOn":false}'));
+  assert.ok(secret.includes('"autoPublish":{"seconds":60,"startOn":false},"permissions":{"resolve":"author"}'));
   for (const leak of ['admins', 'identityHeader', 'X-A']) assert.ok(!secret.includes(leak), leak);
   assert.ok(plugin.generateScripts({ src: path.join(project.root, 'docs') }, { autoPublish: false })
     .bodyScriptsHtml.includes('"autoPublish":false'));

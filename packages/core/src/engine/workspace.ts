@@ -551,6 +551,84 @@ async function buildWorkspaceProject(
   }
 }
 
+/**
+ * The docs source directory (absolute) of one workspace project: its own
+ * config's `src`, resolved against the project directory. Null when the
+ * project's config cannot be loaded. Plugin actions use it (through
+ * `ctx.docsRootOf`) to keep their data next to the docs of the page that
+ * called them.
+ */
+export async function loadProjectDocsRoot(
+  project: ProjectEntry,
+  workspaceConfig: WorkspaceRootConfig,
+  cwd: string = process.cwd()
+): Promise<string | null> {
+  const projectDir = path.resolve(cwd, project.src);
+  // The same global defaults buildWorkspaceProject passes, so a root-level `src` applies here too.
+  const globalDefaults: Record<string, unknown> = {};
+  for (const key of Object.keys(workspaceConfig)) {
+    if (!['workspace', 'projects', 'out', '_resolvedPath'].includes(key) && !key.startsWith('_')) {
+      globalDefaults[key] = workspaceConfig[key];
+    }
+  }
+  try {
+    const config = await loadConfig('docmd.config.js', { cwd: projectDir, isDev: true, quiet: true, _globalDefaults: globalDefaults });
+    return path.resolve(projectDir, config.src);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Collect and merge plugins from the workspace root config and all subprojects.
+ */
+export async function collectWorkspacePlugins(
+  workspaceConfig: WorkspaceRootConfig,
+  cwd: string = process.cwd()
+): Promise<Record<string, any>> {
+  const merged: Record<string, any> = {};
+
+  const addPlugins = (plugins: unknown) => {
+    if (!plugins) return;
+    if (Array.isArray(plugins)) {
+      for (const item of plugins) {
+        if (typeof item === 'string' && merged[item] === undefined) {
+          merged[item] = true;
+        }
+      }
+    } else if (typeof plugins === 'object') {
+      for (const [name, val] of Object.entries(plugins)) {
+        if (val !== false && (merged[name] === undefined || merged[name] === false)) {
+          merged[name] = val;
+        }
+      }
+    }
+  };
+
+  addPlugins(workspaceConfig.plugins);
+
+  const globalDefaults: Record<string, unknown> = {};
+  for (const key of Object.keys(workspaceConfig)) {
+    if (!['workspace', 'projects', 'out', '_resolvedPath'].includes(key) && !key.startsWith('_')) {
+      globalDefaults[key] = workspaceConfig[key];
+    }
+  }
+
+  if (workspaceConfig.workspace?.projects) {
+    for (const project of workspaceConfig.workspace.projects) {
+      const projectDir = path.resolve(cwd, project.src);
+      try {
+        const pConfig = await loadConfig('docmd.config.js', { cwd: projectDir, isDev: true, quiet: true, _globalDefaults: globalDefaults });
+        addPlugins(pConfig?.plugins);
+      } catch {
+        // ignore errors reading child project config
+      }
+    }
+  }
+
+  return merged;
+}
+
 /* ── Dev Server Wrapper ────────────────────────────────────── */
 
 /**
@@ -581,6 +659,15 @@ export async function devWorkspace(
 
   let host: import('../server/action-host.js').ActionHost | undefined;
 
+  // Subproject directory → docs source directory, read by the action dispatcher on every call.
+  const docsRoots = new Map<string, string>();
+  const refreshDocsRoot = async (project: ProjectEntry) => {
+    const docsRoot = await loadProjectDocsRoot(project, workspaceConfig, CWD);
+    if (docsRoot) docsRoots.set(path.resolve(CWD, project.src), docsRoot);
+    else docsRoots.delete(path.resolve(CWD, project.src));
+  };
+  for (const project of workspaceConfig.workspace!.projects) await refreshDocsRoot(project);
+
   function broadcastReload() {
     host?.broadcastReload();
   }
@@ -600,18 +687,27 @@ export async function devWorkspace(
     // WebSocket server and the plugin dispatcher.
     (async () => {
       try {
+        const workspacePlugins = await collectWorkspacePlugins(workspaceConfig, CWD);
+        const actionHostConfig = {
+          ...workspaceConfig,
+          plugins: workspacePlugins,
+        };
+        const subprojectDirs = (workspaceConfig.workspace?.projects || []).map((p) => path.resolve(CWD, p.src));
+        const subprojectNodeModules = subprojectDirs.map((dir) => path.join(dir, 'node_modules'));
+
         host = await createActionHost({
           server,
           mode: 'dev',
           projectRoot: CWD,
-          config: workspaceConfig as any,
+          config: actionHostConfig as any,
           verifyClient: createOriginVerify(networkIp ? [networkIp] : []),
           getWorkerPool: () => undefined,
-          resolvePaths: [CWD],
+          resolvePaths: [CWD, path.join(CWD, 'node_modules'), ...subprojectDirs, ...subprojectNodeModules],
+          workspaceDocsRoots: docsRoots,
           // Workspace dev has no per-project rebuild entry point: its watcher
           // rebuilds and reloads. Plugins calling requestRebuild get this error.
           rebuild: async () => {
-            throw new Error('Rebuild is not available in workspace dev');
+            throw new Error('Rebuild is not available in workspace dev: write the source files and the workspace watcher will rebuild and reload');
           },
         });
       } catch (err: any) {
@@ -673,7 +769,9 @@ export async function devWorkspace(
       if (Date.now() - lastConfigRebuildAt < CONFIG_QUIET_MS) return;
 
       if (filename.includes('.git') || filename.includes('node_modules') ||
-          filename.includes('.DS_Store') || filename.startsWith('.') ||
+          filename.includes('.threads') ||
+          filename.split(/[/\\]/).some((seg) => seg.startsWith('.')) ||
+          filename.includes('.DS_Store') ||
           filename.includes('docmd.config-') || filename.endsWith('.js.bak')) return;
 
       // Exclude build output
@@ -710,6 +808,7 @@ export async function devWorkspace(
           if (isConfigUpdate) {
             lastConfigRebuildAt = Date.now();
             signatureTracker.reset();
+            await refreshDocsRoot(project);
           } else {
             lastContentRebuildAt = Date.now();
           }

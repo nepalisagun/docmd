@@ -14,16 +14,18 @@ const EN: Record<string, string> = JSON.parse(fs.readFileSync(safePath(pluginRoo
 const T0 = 1_000_000;
 const SECONDS = 60;
 
-const journal = (ops: number, mode: DraftMode = 'collect', updatedAt = new Date(T0).toISOString()): Journal => ({
+const journal = (ops: number, mode: DraftMode = 'collect', updatedAt = new Date(T0).toISOString(), profile?: Journal['profile']): Journal => ({
   version: 1,
   mode,
-  review: { id: 'r-1', updatedAt },
+  review: { id: 'r-1', updatedAt, title: null, summary: null },
   ops: Array.from({ length: ops }, (_, i) => ({ kind: 'delete-thread', opId: `o-${i}`, at: updatedAt, file: 'a.md', threadId: 't-1' })),
+  ...(profile ? { profile } : {}),
 });
 
 // Fakes, built once; `beforeEach` resets what a test steers.
 const s = {
   journal: null as Journal | null,
+  orphanedMine: 0,
   whoamiError: null as unknown,
   setModeError: null as unknown,
   publishError: null as unknown,
@@ -36,7 +38,7 @@ const s = {
 const api = {
   async whoami(): Promise<WhoAmI> {
     s.calls.push('whoami');
-    const answer = { journal: s.journal };
+    const answer = { identity: null, journal: s.journal, orphanedMine: s.orphanedMine };
     const gate = s.whoamiGates.shift();
     if (gate) await gate;
     if (s.whoamiError) throw s.whoamiError;
@@ -86,7 +88,7 @@ function build(autoPublish = true) {
 }
 
 beforeEach(() => {
-  Object.assign(s, { journal: null, whoamiError: null, setModeError: null, publishError: null, skipped: 0, gate: null, whoamiGates: [], setModeGate: null, calls: [] });
+  Object.assign(s, { journal: null, orphanedMine: 0, whoamiError: null, setModeError: null, publishError: null, skipped: 0, gate: null, whoamiGates: [], setModeGate: null, calls: [] });
   clock = T0;
   scheduled.clear();
 });
@@ -101,10 +103,56 @@ test('refresh: the count is the ops of the latest whoami; no journal is 0', asyn
   s.journal = journal(1);
   await c.refresh();
   assert.equal(c.view().state.label, '1 unpublished comment');
+  const profile = { name: 'Ann', avatarUrl: '' };
+  s.journal = journal(2, 'collect', undefined, profile);
+  await c.refresh();
+  assert.equal(c.view().state.label, '3 unpublished comments', 'a pending profile counts as one change');
+  s.journal = journal(0, 'collect', undefined, profile);
+  await c.refresh();
+  assert.deepEqual([c.view().state.label, c.view().state.publishDisabled, c.view().pendingCount, c.view().opCount], ['1 unpublished comment', false, 1, 0], 'no comment, so nothing for Discard or the title');
+  s.journal = journal(2, 'collect', undefined, profile);
+  await c.refresh();
+  assert.deepEqual([c.view().pendingCount, c.view().opCount], [3, 2]);
   s.journal = null;
   await c.refresh();
   assert.deepEqual([c.view().state.label, c.view().state.publishDisabled, c.view().state.errorLine], ['0 unpublished comments', true, null]);
   assert.ok(changes() >= 3, 'every refresh asks for a render');
+});
+
+test('view.reviewId and pendingCount follow the journal after a refresh, and are null / 0 before one and after a failed one', async () => {
+  const { c } = build();
+  assert.deepEqual([c.view().reviewId, c.view().pendingCount], [null, 0]);
+  s.journal = journal(2);
+  await c.refresh();
+  assert.deepEqual([c.view().reviewId, c.view().pendingCount], ['r-1', 2]);
+  s.whoamiError = new Error('socket closed');
+  await c.refresh();
+  assert.deepEqual([c.view().reviewId, c.view().pendingCount], [null, 0]);
+});
+
+test('view.reviewSummary is the journal\'s summary, and null before a refresh, with none, and after a failed one', async () => {
+  const { c } = build();
+  assert.equal(c.view().reviewSummary, null);
+  s.journal = journal(1);
+  await c.refresh();
+  assert.equal(c.view().reviewSummary, null);
+  s.journal = { ...journal(1), review: { ...journal(1).review, summary: 'Why it changes.' } };
+  await c.refresh();
+  assert.equal(c.view().reviewSummary, 'Why it changes.');
+  s.whoamiError = new Error('socket closed');
+  await c.refresh();
+  assert.equal(c.view().reviewSummary, null);
+});
+
+test('view.orphanedMine follows the latest whoami, and is 0 before one and after a failed one', async () => {
+  const { c } = build();
+  assert.deepEqual([c.view().orphanedMine, c.view().state.orphanLine], [0, null]);
+  s.orphanedMine = 2;
+  await c.refresh();
+  assert.deepEqual([c.view().orphanedMine, c.view().state.orphanLine], [2, '2 of your comments lost their anchor']);
+  s.whoamiError = new Error('socket closed');
+  await c.refresh();
+  assert.deepEqual([c.view().orphanedMine, c.view().state.orphanLine], [0, null]);
 });
 
 test('refresh: a rejected whoami shows …, disables Publish and shows the error text or the load-failed line', async () => {
@@ -246,12 +294,19 @@ test('auto: the timer fire publishes once; collect never does', async () => {
   assert.equal(s.calls.filter((x) => x === 'publishReview').length, 1);
   assert.equal(c.view().ring, null, 'the ring goes when the timer fires');
 
+  s.journal = journal(0, 'auto', new Date(clock).toISOString(), { name: 'Ann', avatarUrl: '' });
+  await c.refresh();
+  assert.notEqual(c.view().ring, null, 'a profile alone starts the countdown');
+  advance(SECONDS * 1000);
+  await settle();
+  assert.equal(s.calls.filter((x) => x === 'publishReview').length, 2, 'and the fire publishes it');
+
   s.journal = journal(1, 'collect');
   await c.refresh();
   assert.equal(c.view().ring, null);
   advance(SECONDS * 5000);
   await settle();
-  assert.equal(s.calls.filter((x) => x === 'publishReview').length, 1, 'collect mode never auto-publishes');
+  assert.equal(s.calls.filter((x) => x === 'publishReview').length, 2, 'collect mode never auto-publishes');
 });
 
 test('auto: a failed auto publish shows its error, drops the ring and does not retry until the journal changes', async () => {
@@ -279,4 +334,138 @@ test('collect-only (no autoPublish): no play/pause, no timer, Publish works', as
   assert.deepEqual([c.view().state.variant, c.view().state.showPlayPause, c.view().ring], ['collect-only', false, null]);
   await c.publish();
   assert.deepEqual(s.calls.slice(0, 2), ['whoami', 'publishReview']);
+});
+
+const publishes = () => s.calls.filter((x) => x === 'publishReview').length;
+
+test('discard confirmation open: the deadline passing publishes nothing while it stays open', async () => {
+  const { c } = build();
+  s.journal = journal(1, 'auto');
+  await c.refresh();
+  c.hold();
+  advance(SECONDS * 1000 * 3);
+  await settle();
+  assert.equal(publishes(), 0);
+});
+
+test('discard confirmation: Cancel after the deadline publishes once, right after it closes', async () => {
+  const { c } = build();
+  s.journal = journal(1, 'auto');
+  await c.refresh();
+  c.hold();
+  advance(SECONDS * 1000 + 5);
+  await settle();
+  c.release('kept');
+  await settle();
+  assert.equal(publishes(), 1);
+  c.release('kept');
+  advance(SECONDS * 10_000);
+  await settle();
+  assert.equal(publishes(), 1, 'one publish only');
+});
+
+test('discard confirmation: Cancel before the deadline keeps the original deadline', async () => {
+  const { c } = build();
+  s.journal = journal(1, 'auto');
+  await c.refresh();
+  advance(20_000);
+  c.hold();
+  advance(10_000);
+  c.release('kept');
+  await settle();
+  assert.equal(publishes(), 0, 'closing early does not publish');
+  advance(SECONDS * 1000 - 30_000 - 1);
+  await settle();
+  assert.equal(publishes(), 0, 'not restarted, not early');
+  advance(1);
+  await settle();
+  assert.equal(publishes(), 1, 'fires at updatedAt + seconds');
+});
+
+test('discard confirmation: Confirm publishes nothing, even when the deadline passed while it was open', async () => {
+  const { c } = build();
+  s.journal = journal(1, 'auto');
+  await c.refresh();
+  c.hold();
+  advance(SECONDS * 1000 + 5);
+  await settle();
+  s.journal = journal(0, 'auto');
+  c.release('discarded');
+  await c.refresh();
+  advance(SECONDS * 10_000);
+  await settle();
+  assert.equal(publishes(), 0);
+});
+
+test('discard confirmation: Confirm before the old journal is re-read cannot publish from a stale countdown', async () => {
+  const { c } = build();
+  s.journal = journal(1, 'auto');
+  await c.refresh();
+  c.hold();
+  c.release('discarded');
+  advance(SECONDS * 1000 + 5);
+  await settle();
+  assert.equal(publishes(), 0);
+});
+
+test('discard confirmation: a failed refresh while held is not a discard; the due fire publishes once after it recovers', async () => {
+  const { c } = build();
+  s.journal = journal(1, 'auto');
+  await c.refresh();
+  c.hold();
+  advance(SECONDS * 1000 + 5);
+  await settle();
+  s.whoamiError = new Error('offline');
+  await c.refresh();
+  c.release('kept'); // the widget lost the element
+  await settle();
+  assert.equal(publishes(), 0, 'count unknown: nothing to publish yet');
+  s.whoamiError = null;
+  await c.refresh();
+  await settle();
+  assert.equal(publishes(), 1);
+});
+
+test('discard confirmation: a newer journal while held moves the deadline; Cancel does not publish early', async () => {
+  const { c } = build();
+  s.journal = journal(1, 'auto');
+  await c.refresh();
+  c.hold();
+  advance(SECONDS * 1000 + 5);
+  await settle();
+  s.journal = journal(2, 'auto', new Date(clock).toISOString());
+  await c.refresh();
+  c.release('kept');
+  await settle();
+  assert.equal(publishes(), 0);
+  advance(SECONDS * 1000);
+  await settle();
+  assert.equal(publishes(), 1, 'fires at the new deadline');
+});
+
+test('discard confirmation: a refresh that finds no comments left releases the hold, whatever profile is pending', async () => {
+  const { c } = build();
+  s.journal = journal(1, 'auto');
+  await c.refresh();
+  c.hold();
+  s.journal = journal(0, 'auto', undefined, { name: 'Ann', avatarUrl: '' });
+  await c.refresh();
+  assert.equal(c.isHeld(), false);
+});
+
+test('discard confirmation: a failed Confirm drops the due fire without publishing; a newer edit re-arms it', async () => {
+  const { c } = build();
+  s.journal = journal(1, 'auto');
+  await c.refresh();
+  c.hold();
+  advance(SECONDS * 1000 + 5);
+  await settle();
+  c.release('failed');
+  await settle();
+  assert.equal(publishes(), 0);
+  s.journal = journal(2, 'auto', new Date(clock).toISOString());
+  await c.refresh();
+  advance(SECONDS * 1000);
+  await settle();
+  assert.equal(publishes(), 1);
 });

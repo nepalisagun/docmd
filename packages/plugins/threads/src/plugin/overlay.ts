@@ -21,6 +21,8 @@ export function overlay(threads: Thread[], ops: DraftOp[], file: string, who: { 
           resolved: false,
           resolved_by: null,
           resolved_at: null,
+          draft: true,
+          ...(op.anchor?.quote ? { anchor: { quote: op.anchor.quote } } : {}),
           comments: [draftComment(op.threadId, op.commentId, null, op.body, op.at, who)],
         });
         break;
